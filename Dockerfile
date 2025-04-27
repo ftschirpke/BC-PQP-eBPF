@@ -32,3 +32,5 @@ RUN sed -i 's/.*PermitRootLogin.*/PermitRootLogin yes/g' /etc/ssh/sshd_config
 # set hostname
 RUN echo "ebpf" > /etc/hostname
 
+COPY build/hello.sh /root/
+

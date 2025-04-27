@@ -1,5 +1,8 @@
-qemu/filesystem-diff.qcow2
+build/**
+
+qemu/filesystem.tar
 qemu/filesystem.qcow2
-qemu/filesystem.zip
+qemu/filesystem-diff.qcow2
+qemu/filesystem-large.qcow2
 qemu/qemu.pid
 
