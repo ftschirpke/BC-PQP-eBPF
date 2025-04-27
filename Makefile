@@ -1,6 +1,8 @@
 # inspired by https://github.com/k8spacket/k8spacket/blob/master/Makefile
-SU_DOCKER=$(id -nGz "$USER" | grep -qzxF "docker" || echo sudo)
-SU_LVIRTD=$(id -nGz "$USER" | grep -qzxF "libvirtd" || echo sudo)
+
+SU_DOCKER=$(shell id -nGz "$USER" | grep -qzxF "docker" || echo sudo)
+SU_LVIRTD=$(shell id -nGz "$USER" | grep -qzxF "libvirtd" || echo sudo)
+
 qemu/filesystem.qcow2: Dockerfile
 	# build filesystem image and store as tar archive
 	DOCKER_BUILDKIT=1 ${SU_DOCKER} docker build --output "type=tar,dest=qemu/filesystem.tar" .
