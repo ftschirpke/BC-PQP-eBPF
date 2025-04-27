@@ -1,6 +1,6 @@
 # inspired by https://github.com/k8spacket/k8spacket/blob/master/tests/e2e/vm/filesystem/Dockerfile
 
-FROM ubuntu:24.04
+FROM ubuntu:24.04@sha256:f8b860e4f9036f2694571770da292642eebcc4c2ea0c70a1a9244c2a1d436cd9
 
 RUN apt-get update \
     # install systemd as initialization module
