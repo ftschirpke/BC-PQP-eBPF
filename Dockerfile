@@ -1,36 +1,29 @@
 # inspired by https://github.com/k8spacket/k8spacket/blob/master/tests/e2e/vm/filesystem/Dockerfile
 
-FROM ubuntu:24.04@sha256:f8b860e4f9036f2694571770da292642eebcc4c2ea0c70a1a9244c2a1d436cd9
+FROM alpine:latest@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c
 
-RUN apt-get update \
-    # install systemd as initialization module
-    && apt-get install --no-install-recommends --no-install-suggests -y systemd \
-    # install ssh to allow connect from outside
-    && apt-get install -y openssh-server \
-    # install net-tools to enable eth0 network interface
-    && apt-get install --no-install-recommends --no-install-suggests -y net-tools \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk update \
+    # autologin
+    && apk add agetty \ 
+    # init system (used for networking)
+    && apk add openrc
 
-# switch initialization target from GUI (graphical.target) to text (multi-user.target) mode
-RUN cd /lib/systemd/system && ln -sf multi-user.target default.target
-
-# enable serial port to use for login
-RUN systemctl enable getty@ttyS0.service
-# enable ssh server
-RUN systemctl enable ssh.service
+# enable serial port for login
+RUN echo "ttyS0::respawn:/sbin/agetty --autologin root ttyS0 vt100\n" >> /etc/inittab
 
 # set root password
 RUN echo "root:root" | chpasswd
+# enable networking
+RUN echo "auto lo" > /etc/network/interfaces
+RUN echo "iface lo inet loopback" >> /etc/network/interfaces
+RUN echo "auto eth0" >> /etc/network/interfaces
+RUN echo "iface eth0 inet dhcp" >> /etc/network/interfaces
+RUN rc-update add networking boot
 
-# enable autologin on serial port
-RUN sed -i 's/ExecStart=.*/ExecStart=-\/sbin\/agetty --noissue --autologin root %I $TERM/g' /lib/systemd/system/getty@.service
-# keep boot messages on tty console
-RUN sed -i 's/TTYVTDisallocate=yes/TTYVTDisallocate=no/g' /lib/systemd/system/getty@.service
-# allow login as root through ssh
-RUN sed -i 's/.*PermitRootLogin.*/PermitRootLogin yes/g' /etc/ssh/sshd_config
+# disable welcome prompt
+RUN echo "" > /etc/motd
 
 # set hostname
 RUN echo "ebpf" > /etc/hostname
-
 COPY build/hello.sh /root/
 
