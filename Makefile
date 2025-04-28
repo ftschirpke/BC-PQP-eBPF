@@ -6,6 +6,8 @@ SU_LVIRTD=$(shell id -nGz "${USER}" | grep -qzxF "libvirtd" || echo sudo)
 qemu/filesystem.qcow2: Dockerfile
 	# build filesystem image and store as tar archive
 	DOCKER_BUILDKIT=1 ${SU_DOCKER} docker build --output "type=tar,dest=qemu/filesystem.tar" .
+	# extract kernel
+	tar --extract --file=qemu/filesystem.tar boot/vmlinuz-virt boot/initramfs-virt
 	# convert tar to qcow2 image
 	${SU_LVIRTD} virt-make-fs --format=qcow2 --size=+100M qemu/filesystem.tar qemu/filesystem-large.qcow2
 	# reduce size of image
@@ -24,7 +26,8 @@ qemu: build qemu/filesystem.qcow2
 		-cpu host \
 		-m 4G \
 		-smp 4 \
-		-kernel ./qemu/bzImage \
+		-kernel ./boot/vmlinuz-virt
+		-initrd ./boot/initramfs-virt
 		-append "console=ttyS0 root=/dev/sda rw" \
 		-drive file="./qemu/filesystem-diff.qcow2,format=qcow2" \
 		-enable-kvm \
