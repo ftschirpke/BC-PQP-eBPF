@@ -4,7 +4,7 @@ FROM alpine:latest@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff45
 ARG FLAVOR
 RUN apk update
 # kernel, autologin, init system (used for networking)
-RUN apk add linux-${FLAVOR} agetty openrc
+RUN apk add linux-${FLAVOR} agetty openrc xdp-tools
 # debug stuff, in a new layer to avoid unnecessary rebuilds
 RUN apk add 
 
@@ -25,5 +25,10 @@ RUN echo "" > /etc/motd
 
 # set hostname
 RUN echo "ebpf" > /etc/hostname
-COPY build/hello.sh /root/
+
+COPY load.sh /root/
+COPY status.sh /root/
+COPY unload.sh /root/
+COPY build/bc-pqp-ebpf-kernel.o /root/
+
 

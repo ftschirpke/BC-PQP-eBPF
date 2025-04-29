@@ -1,0 +1,6 @@
+[submodule "lib/xdp-tools"]
+	path = external/xdp-tools
+	url = https://github.com/xdp-project/xdp-tools/
+[submodule "lib/libbpf"]
+	path = external/libbpf
+	url = https://github.com/libbpf/libbpf/
