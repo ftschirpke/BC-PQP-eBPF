@@ -1,14 +1,12 @@
 # inspired by https://github.com/k8spacket/k8spacket/blob/master/tests/e2e/vm/filesystem/Dockerfile
 
 FROM alpine:latest@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c
-
-RUN apk update \
-    # kernel 
-    && apk add linux-virt \
-    # autologin
-    && apk add agetty \ 
-    # init system (used for networking)
-    && apk add openrc
+ARG FLAVOR
+RUN apk update
+# kernel, autologin, init system (used for networking)
+RUN apk add linux-${FLAVOR} agetty openrc
+# debug stuff, in a new layer to avoid unnecessary rebuilds
+RUN apk add 
 
 # enable serial port for login
 RUN echo "ttyS0::respawn:/sbin/agetty --autologin root ttyS0 vt100\n" >> /etc/inittab
