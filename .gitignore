@@ -5,4 +5,4 @@ qemu/filesystem.qcow2
 qemu/filesystem-diff.qcow2
 qemu/filesystem-large.qcow2
 qemu/qemu.pid
-
+boot/*
