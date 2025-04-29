@@ -25,5 +25,8 @@ RUN echo "" > /etc/motd
 
 # set hostname
 RUN echo "ebpf" > /etc/hostname
-COPY build/hello.sh /root/
+
+# copy binaries
+COPY bc-pqq-ebpf-rs/target/debug/bc-pqp-ebpf-rs /root/
+# COPY bc-pqq-ebpf-rs/target/release/bc-pqp-ebpf-rs /root/
 

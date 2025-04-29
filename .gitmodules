@@ -1,0 +1,6 @@
+[submodule "bc-pqp-ebpf-c/xdp-tools"]
+	path = bc-pqp-ebpf-c/xdp-tools
+	url = https://github.com/xdp-project/xdp-tools/
+[submodule "bc-pqp-ebpf-c/libbpf"]
+	path = bc-pqp-ebpf-c/libbpf
+	url = https://github.com/libbpf/libbpf/

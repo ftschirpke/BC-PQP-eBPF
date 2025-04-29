@@ -1,0 +1,17 @@
+[package]
+name = "bc-pqp-ebpf-rs-ebpf"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bc-pqp-ebpf-rs-common = { path = "../bc-pqp-ebpf-rs-common" }
+
+aya-ebpf = { workspace = true }
+aya-log-ebpf = { workspace = true }
+
+[build-dependencies]
+which = { workspace = true }
+
+[[bin]]
+name = "bc-pqp-ebpf-rs"
+path = "src/main.rs"

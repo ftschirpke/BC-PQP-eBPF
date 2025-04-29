@@ -1,0 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+#include <bpf/bpf_helpers.h>
+#include <linux/bpf.h>
+
+SEC("xdp")
+int xdp_prog_simple(struct xdp_md* ctx) { return XDP_PASS; }
+
+char _license[] SEC("license") = "GPL";

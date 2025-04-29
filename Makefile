@@ -3,6 +3,8 @@
 SU_DOCKER=$(shell id -nGz "${USER}" | grep -qzxF "docker" || echo sudo)
 SU_LVIRTD=$(shell id -nGz "${USER}" | grep -qzxF "libvirtd" || echo sudo)
 
+all: qemu
+
 qemu/filesystem.qcow2: Dockerfile
 	# build filesystem image and store as tar archive
 	DOCKER_BUILDKIT=1 ${SU_DOCKER} docker build --output "type=tar,dest=qemu/filesystem.tar" .
@@ -11,11 +13,15 @@ qemu/filesystem.qcow2: Dockerfile
 	# reduce size of image
 	qemu-img convert qemu/filesystem-large.qcow2 -O qcow2 qemu/filesystem.qcow2
 
-build:
-	mkdir -p build
-	echo "echo Hello" > build/hello.sh
+build: bc-pqq-ebpf-rs/target/debug/bc-pqp-ebpf-rs bc-pqq-ebpf-rs/target/release/bc-pqp-ebpf-rs
 
-all: qemu
+bc-pqq-ebpf-rs/target/debug/bc-pqp-ebpf-rs:
+	cd bc-pqp-ebpf-rs/
+	cargo build
+
+bc-pqq-ebpf-rs/target/release/bc-pqp-ebpf-rs:
+	cd bc-pqp-ebpf-rs/
+	cargo build -r
 
 qemu: build qemu/filesystem.qcow2
 	rm -f qemu/filesystem-diff.qcow2

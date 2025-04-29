@@ -1,0 +1,23 @@
+BasedOnStyle: LLVM
+IndentWidth: 4
+---
+Language: Cpp
+AccessModifierOffset: -4
+AlignAfterOpenBracket: BlockIndent
+AlwaysBreakTemplateDeclarations: Yes
+BreakBeforeBinaryOperators: NonAssignment
+BreakBeforeBraces: Attach
+BreakConstructorInitializers: BeforeColon
+BreakBeforeTernaryOperators: true
+ColumnLimit: 120
+EmptyLineBeforeAccessModifier: Never
+IndentCaseLabels: true
+IndentRequiresClause: false
+KeepEmptyLinesAtTheStartOfBlocks: false
+MaxEmptyLinesToKeep: 2
+PenaltyReturnTypeOnItsOwnLine: 10000
+PenaltyBreakAssignment: 10000
+PointerAlignment: Left
+SpaceInEmptyBlock: false
+Standard: c++20
+...
