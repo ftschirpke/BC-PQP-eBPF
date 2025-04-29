@@ -35,13 +35,13 @@ SHARED_OBJ = $(addprefix $(BUILD_DIR)/,$(SHARED_C:%.c=%.o))
 all: $(EBPF_OBJ)
 
 $(LIBBPF_OBJ):
-	cd $(LIBBPF_DIR)
-	make all OBJDIR=.
-	mkdir -p build
+	cd $(LIBBPF_DIR) && 
+	make all OBJDIR=. &&
+	mkdir -p build &&
 	make install_headers DESTDIR=build OBJDIR=.
 
 $(LIBXDP_OBJ):
-	cd $(LIBXDP_DIR)
+	cd $(LIBXDP_DIR) &&
 	make all OBJDIR=.
 
 $(EBPF_OBJ): $(BUILD_DIR)/%.o: %.c $(LIBBPF_OBJ)

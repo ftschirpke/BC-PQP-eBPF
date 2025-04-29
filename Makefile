@@ -13,15 +13,7 @@ qemu/filesystem.qcow2: Dockerfile
 	# reduce size of image
 	qemu-img convert qemu/filesystem-large.qcow2 -O qcow2 qemu/filesystem.qcow2
 
-build: bc-pqq-ebpf-rs/target/debug/bc-pqp-ebpf-rs bc-pqq-ebpf-rs/target/release/bc-pqp-ebpf-rs
-
-bc-pqq-ebpf-rs/target/debug/bc-pqp-ebpf-rs:
-	cd bc-pqp-ebpf-rs/
-	cargo build
-
-bc-pqq-ebpf-rs/target/release/bc-pqp-ebpf-rs:
-	cd bc-pqp-ebpf-rs/
-	cargo build -r
+build: src
 
 qemu: build qemu/filesystem.qcow2
 	rm -f qemu/filesystem-diff.qcow2
@@ -39,4 +31,4 @@ qemu: build qemu/filesystem.qcow2
 clean:
 	-rm -f qemu/*.qcow2 qemu/*.tar build/*
 
-.phony: qemu clean
+.PHONY: qemu clean

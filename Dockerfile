@@ -27,6 +27,6 @@ RUN echo "" > /etc/motd
 RUN echo "ebpf" > /etc/hostname
 
 # copy binaries
-COPY bc-pqq-ebpf-rs/target/debug/bc-pqp-ebpf-rs /root/
+COPY bc-pqp-ebpf-rs/target/debug/bc-pqp-ebpf-rs /root/
 # COPY bc-pqq-ebpf-rs/target/release/bc-pqp-ebpf-rs /root/
 
