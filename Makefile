@@ -9,7 +9,7 @@ qemu/filesystem.qcow2: Dockerfile
 	# extract kernel
 	tar --extract --file=qemu/filesystem.tar boot/vmlinuz-virt boot/initramfs-virt
 	# convert tar to qcow2 image
-	${SU_LVIRTD} virt-make-fs --format=qcow2 --size=+100M qemu/filesystem.tar qemu/filesystem-large.qcow2
+	${SU_LVIRTD} virt-make-fs --partition --format=qcow2 --size=+100M qemu/filesystem.tar qemu/filesystem-large.qcow2
 	# reduce size of image
 	qemu-img convert qemu/filesystem-large.qcow2 -O qcow2 qemu/filesystem.qcow2
 
@@ -26,10 +26,10 @@ qemu: build qemu/filesystem.qcow2
 		-cpu host \
 		-m 4G \
 		-smp 4 \
-		-kernel ./boot/vmlinuz-virt
-		-initrd ./boot/initramfs-virt
-		-append "console=ttyS0 root=/dev/sda rw" \
-		-drive file="./qemu/filesystem-diff.qcow2,format=qcow2" \
+		-kernel ./boot/vmlinuz-virt \
+		-initrd ./boot/initramfs-virt \
+		-append "rootfstype=ext4 modules=ext4 console=ttyS0 root=/dev/sda1 rw" \
+		-hda ./qemu/filesystem-diff.qcow2 \
 		-enable-kvm \
 		-pidfile ./qemu/qemu.pid \
 		-nographic
