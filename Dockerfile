@@ -26,9 +26,9 @@ RUN echo "" > /etc/motd
 # set hostname
 RUN echo "ebpf" > /etc/hostname
 
-COPY load.sh /root/
-COPY status.sh /root/
-COPY unload.sh /root/
+COPY build/load.sh /root/
+COPY build/status.sh /root/
+COPY build/unload.sh /root/
 COPY build/bc-pqp-ebpf-kernel.o /root/
 
 
