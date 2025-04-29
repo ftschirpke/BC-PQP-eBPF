@@ -7,6 +7,8 @@ RUN apk update \
     && apk add agetty \ 
     # init system (used for networking)
     && apk add openrc
+    # xdp loader
+RUN apk add xdp-tools
 
 # enable serial port for login
 RUN echo "ttyS0::respawn:/sbin/agetty --autologin root ttyS0 vt100\n" >> /etc/inittab
@@ -25,5 +27,10 @@ RUN echo "" > /etc/motd
 
 # set hostname
 RUN echo "ebpf" > /etc/hostname
-COPY build/hello.sh /root/
+
+COPY load.sh /root/
+COPY status.sh /root/
+COPY unload.sh /root/
+COPY build/bc-pqp-ebpf-kernel.o /root/
+
 
