@@ -1,26 +1,50 @@
 # inspired by https://github.com/k8spacket/k8spacket/blob/master/tests/e2e/vm/filesystem/Dockerfile
 
-FROM alpine:latest@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c
+FROM ubuntu:24.04@sha256:f8b860e4f9036f2694571770da292642eebcc4c2ea0c70a1a9244c2a1d436cd9
+ARG BUILD_DIR=build
 
-RUN apk update \
-    # autologin
-    && apk add agetty \ 
-    # init system (used for networking)
-    && apk add openrc
-    # xdp loader
-RUN apk add xdp-tools
+RUN apt-get update \
+    # install systemd as initialization module
+    && apt-get install --no-install-recommends --no-install-suggests -y systemd \
+    # install ssh to allow connect from outside
+    && apt-get install -y openssh-server \
+    # install net-tools to enable eth0 network interface
+    && apt-get install --no-install-recommends --no-install-suggests -y net-tools \
+    # tools for loading and unloading of the program
+    && apt-get install -y xdp-tools \
+    && rm -rf /var/lib/apt/lists/*
 
-# enable serial port for login
-RUN echo "ttyS0::respawn:/sbin/agetty --autologin root ttyS0 vt100\n" >> /etc/inittab
+# switch initialization target from GUI (graphical.target) to text (multi-user.target) mode
+RUN cd /lib/systemd/system && ln -sf multi-user.target default.target
 
-# set root password
-RUN echo "root:root" | chpasswd
-# enable networking
-RUN echo "auto lo" > /etc/network/interfaces
-RUN echo "iface lo inet loopback" >> /etc/network/interfaces
-RUN echo "auto eth0" >> /etc/network/interfaces
-RUN echo "iface eth0 inet dhcp" >> /etc/network/interfaces
-RUN rc-update add networking boot
+# enable serial port to use for login
+RUN systemctl enable getty@ttyS0.service
+# enable ssh server
+RUN systemctl enable ssh.service
+
+# enable autologin on serial port
+RUN sed -i 's/ExecStart=.*/ExecStart=-\/sbin\/agetty --noissue --autologin root %I $TERM/g' /lib/systemd/system/getty@.service
+
+# enable eth0
+RUN cat <<EOF >> /etc/systemd/system/eth0.service
+    [Unit]
+    Description=eth0 service
+
+    [Service]
+    User=root
+    WorkingDirectory=/root
+    Type=oneshot
+    ExecStart=ifconfig eth0 10.0.2.15 netmask 255.255.255.0
+    ExecStart=route add default gw 10.0.2.2
+    ExecStart=/bin/bash -c '/usr/bin/echo nameserver 8.8.8.8 > /etc/resolv.conf'
+    ExecStart=/bin/bash -c '/usr/bin/echo "10.0.2.15 k8spacket.domain" >> /etc/hosts'
+    ExecStart=/bin/bash -c '/usr/bin/echo "127.0.0.1 k8spacket-tls12.domain" >> /etc/hosts'
+    ExecStart=/bin/bash -c '/usr/bin/echo "10.0.2.15 k8spacket-tls13.domain" >> /etc/hosts'
+
+    [Install]
+    WantedBy=multi-user.target
+EOF
+RUN systemctl enable eth0.service
 
 # disable welcome prompt
 RUN echo "" > /etc/motd
@@ -28,9 +52,9 @@ RUN echo "" > /etc/motd
 # set hostname
 RUN echo "ebpf" > /etc/hostname
 
-COPY load.sh /root/
-COPY status.sh /root/
-COPY unload.sh /root/
-COPY build/bc-pqp-ebpf-kernel.o /root/
+COPY ${BUILD_DIR}/load.sh /root/
+COPY ${BUILD_DIR}/status.sh /root/
+COPY ${BUILD_DIR}/unload.sh /root/
+COPY ${BUILD_DIR}/bc-pqp-ebpf-kernel.o /root/
 
 
