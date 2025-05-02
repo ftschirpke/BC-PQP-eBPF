@@ -1,8 +1,15 @@
-# inspired by https://github.com/k8spacket/k8spacket/blob/master/tests/e2e/vm/filesystem/Dockerfile
+ARG ALPINE_REVISION=latest@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88
+FROM alpine:${ALPINE_REVISION} AS build
+RUN apk add linux-headers clang llvm elfutils-dev libbpf-dev xdp-tools make
+COPY ./src /root/src
+COPY ./Makefile /root/Makefile
+WORKDIR /root
+RUN make build script
 
-FROM alpine:latest@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c
+# inspired by https://github.com/k8spacket/k8spacket/blob/master/tests/e2e/vm/filesystem/Dockerfile
+FROM alpine:${ALPINE_REVISION}
 ARG FLAVOR
-RUN apk update
+
 # kernel, autologin, init system (used for networking)
 RUN apk add linux-${FLAVOR} agetty openrc xdp-tools
 # debug stuff, in a new layer to avoid unnecessary rebuilds
@@ -25,10 +32,4 @@ RUN echo "" > /etc/motd
 
 # set hostname
 RUN echo "ebpf" > /etc/hostname
-
-COPY build/load.sh /root/
-COPY build/status.sh /root/
-COPY build/unload.sh /root/
-COPY build/bc-pqp-ebpf-kernel.o /root/
-
-
+COPY --from=build --chmod=700 /root/build/* /root/
