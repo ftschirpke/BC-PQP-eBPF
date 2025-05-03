@@ -65,25 +65,28 @@ script: $(LOAD_SCRIPT) $(STATUS_SCRIPT) $(UNLOAD_SCRIPT)
 
 SU_DOCKER=$(shell id -nGz "${USER}" | grep -qzxF "docker" || echo sudo)
 SU_LVIRTD=$(shell id -nGz "${USER}" | grep -qzxF "libvirtd" || echo sudo)
-FLAVOR=virt
+KERNEL_VERSION=6.8.0-59-generic
+KERNEL_NAME=boot/vmlinuz-${KERNEL_VERSION}
+INITRD_NAME=boot/initrd.img-${KERNEL_VERSION}
 
 qemu/filesystem.qcow2: Dockerfile $(EBF_OBJ) 
 	# build filesystem image and store as tar archive
-	DOCKER_BUILDKIT=1 ${SU_DOCKER} docker build --build-arg FLAVOR=${FLAVOR} --output "type=tar,dest=qemu/filesystem.tar" .
+	DOCKER_BUILDKIT=1 ${SU_DOCKER} docker build --output "type=tar,dest=qemu/filesystem.tar" .
 	# extract kernel
-	tar --extract --file=qemu/filesystem.tar boot/vmlinuz-${FLAVOR} boot/initramfs-${FLAVOR} boot/config-6.12.25-0-${FLAVOR}
+	KERNEL_VERSION=6.8.0-59-generic
+	tar --extract --file=qemu/filesystem.tar ${KERNEL_NAME} ${INITRD_NAME} boot/config-${KERNEL_VERSION}
 	# convert tar to qcow2 image
-	${SU_LVIRTD} virt-make-fs --partition --type=ext4 --format=qcow2 --size=+100M qemu/filesystem.tar qemu/filesystem.qcow2
+	${SU_LVIRTD} virt-make-fs --type=ext4 --format=qcow2 --size=+100M qemu/filesystem.tar qemu/filesystem.qcow2
 
 qemu: qemu/filesystem.qcow2
 	${SU_LVIRTD} qemu-system-x86_64 \
 		-cpu host \
 		-m 4G \
 		-smp 4 \
-		-nic user,model=virtio-net-pci \
-		-kernel ./boot/vmlinuz-${FLAVOR} \
-		-initrd ./boot/initramfs-${FLAVOR} \
-		-append "rootfstype=ext4 console=ttyS0 root=/dev/sda1 rw" \
+		-nic user \
+		-kernel ./${KERNEL_NAME} \
+		-initrd ./${INITRD_NAME} \
+		-append "console=ttyS0 root=/dev/sda rw" \
 		-hda ./qemu/filesystem.qcow2 \
 		-enable-kvm \
 		-pidfile ./qemu/qemu.pid \
