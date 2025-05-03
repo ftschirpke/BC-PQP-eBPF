@@ -1,6 +1,4 @@
 build/**
-include/**
-lib/**
 
 qemu/filesystem.tar
 qemu/filesystem.qcow2
