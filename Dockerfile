@@ -1,6 +1,6 @@
-ARG ALPINE_REVISION=latest@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c
+ARG ALPINE_REVISION=edge@sha256:115729ec5cb049ba6359c3ab005ac742012d92bbaa5b8bc1a878f1e8f62c0cb8
 FROM alpine:${ALPINE_REVISION} AS build
-RUN apk add linux-headers clang llvm elfutils-dev libbpf-dev xdp-tools make
+RUN apk add linux-headers clang llvm elfutils-dev libbpf-dev xdp-tools make pahole
 COPY ./src /root/src
 COPY ./Makefile /root/Makefile
 WORKDIR /root
@@ -11,7 +11,7 @@ FROM alpine:${ALPINE_REVISION}
 ARG FLAVOR
 
 # kernel, autologin, init system (used for networking)
-RUN apk add linux-${FLAVOR} agetty openrc xdp-tools
+RUN apk add linux-${FLAVOR} agetty openrc xdp-tools pahole
 # debug stuff, in a new layer to avoid unnecessary rebuilds
 RUN apk add 
 
@@ -32,14 +32,7 @@ RUN echo "" > /etc/motd
 
 # set hostname
 RUN echo "ebpf" > /etc/hostname
-# enable cgroups2 (might be necessary)
-# RUN rc-update add cgroups boot
-# mount root as shared (probably not necessary)
-#RUN echo "/dev/sda1 / ext4 rw,relatime,rshared 0 1" >> /etc/fstab
-# create bpffs mount, see https://github.com/cilium/cilium/blob/main/contrib/systemd/sys-fs-bpf.mount , (should probably not be done here but in sysfs)
-#RUN echo "bpffs /sys/fs/bpf bpf rw,nosuid,nodev,noexec,relatime,mode=700 0 0" >> /etc/fstab
-# see also https://superuser.com/questions/1845965/install-k3s-cilium-alpine
-# this should be run after startup, no idea why openrc doesn't already do this (it should)
-# once bpffs is mounted we get a new (fatal) error when loading the program
-# RUN /etc/init.d/sysfs restart
+# creates the bpffs
+RUN rc-update add sysfs boot
+
 COPY --from=build --chmod=700 /root/build/* /root/
