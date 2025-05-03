@@ -1,37 +1,10 @@
 # inspired by https://github.com/k8spacket/k8spacket/blob/master/Makefile
 
-SU_DOCKER=$(shell id -nGz "${USER}" | grep -qzxF "docker" || echo sudo)
-SU_LVIRTD=$(shell id -nGz "${USER}" | grep -qzxF "libvirtd" || echo sudo)
-
-# === BUILDING THE VIRTUAL MACHINE ===
-
-qemu/filesystem.qcow2: Dockerfile $(EBF_OBJ) load.sh status.sh unload.sh
-	# build filesystem image and store as tar archive
-	DOCKER_BUILDKIT=1 ${SU_DOCKER} docker build --output "type=tar,dest=qemu/filesystem.tar" .
-	# convert tar to qcow2 image
-	${SU_LVIRTD} virt-make-fs --format=qcow2 --size=+100M qemu/filesystem.tar qemu/filesystem-large.qcow2
-	# reduce size of image
-	qemu-img convert qemu/filesystem-large.qcow2 -O qcow2 qemu/filesystem.qcow2
-
 all: qemu
 
-qemu: build qemu/filesystem.qcow2
-	rm -f qemu/filesystem-diff.qcow2
-	${SU_LVIRTD} qemu-img create -f qcow2 -b filesystem.qcow2 -F qcow2 qemu/filesystem-diff.qcow2
-	${SU_LVIRTD} qemu-system-x86_64 \
-		-cpu host \
-		-m 4G \
-		-smp 4 \
-		-kernel ./qemu/bzImage \
-		-append "console=ttyS0 root=/dev/sda rw" \
-		-drive file="./qemu/filesystem-diff.qcow2,format=qcow2" \
-		-enable-kvm \
-		-pidfile ./qemu/qemu.pid \
-		-nographic
-clean:
-	-rm -f qemu/*.qcow2 qemu/*.tar build/*
-
-.PHONY: qemu clean
+EBPF_SRC = bc-pqp-ebpf-kernel.c
+USER_SRC = 
+SHARED_SRC = 
 
 # === BUILDING THE SOURCE CODE ===
 
@@ -43,10 +16,6 @@ LIB_SRC_DIR = external
 
 LLC = llc
 CLANG = clang
-
-EBPF_SRC = bc-pqp-ebpf-kernel.c
-USER_SRC = 
-SHARED_SRC = 
 
 INCLUDE = -I$(INCLUDE_DIR)/usr/include -I$(SRC_DIR)
 WARN_FLAGS = -Wall -Wno-unused-value -Wno-pointer-sign -Wno-compare-distinct-pointer-types -Werror
@@ -82,12 +51,7 @@ $(LIBXDP_OBJ):
 	mkdir -p $(LIBXDP_DIR)
 	make all -C $(LIBXDP_SRC_DIR) OBJDIR=$(realpath $(LIBXDP_DIR))
 
-build: $(EBPF_OBJ) load.sh
-
-load.sh:
-	echo "#!/bin/sh" > $@
-	echo >> $@
-	echo "ip link set dev lo xdpgeneric obj $(@:$(BUILD_DIR)/%=%) sec xdp" >> $@
+build: $(EBPF_OBJ)
 
 $(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(LIBBPF_OBJ)
 	@mkdir -p $(BUILD_DIR)
@@ -100,3 +64,52 @@ $(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(LIBBPF_OBJ)
 		-o $(@:.o=.ll) $<
 	$(LLC) -march=bpf -filetype=obj -o $@ $(@:.o=.ll)
 
+NETWORK_INTERFACE = eth0
+
+LOAD_SCRIPT=$(BUILD_DIR)/load.sh
+STATUS_SCRIPT=$(BUILD_DIR)/status.sh
+UNLOAD_SCRIPT=$(BUILD_DIR)/unload.sh
+
+$(LOAD_SCRIPT):
+	echo "#!/bin/sh" > $@
+	echo "xdp-loader load -m skb $(NETWORK_INTERFACE) $(EBPF_OBJ:$(BUILD_DIR)/%=%)" >> $@
+
+$(STATUS_SCRIPT):
+	echo "#!/bin/sh" > $@
+	echo "xdp-loader status $(NETWORK_INTERFACE)" >> $@
+
+$(UNLOAD_SCRIPT):
+	echo "#!/bin/sh" > $@
+	echo "if [ \$$# -ne 1 ]; then if=\"-a\"; else if=\"-i \$$1\"; fi" >> $@
+	echo "xdp-loader unload $(NETWORK_INTERFACE) \$$if" >> $@
+
+# === BUILDING THE VIRTUAL MACHINE ===
+
+SU_DOCKER=$(shell id -nGz "${USER}" | grep -qzxF "docker" || echo sudo)
+SU_LVIRTD=$(shell id -nGz "${USER}" | grep -qzxF "libvirtd" || echo sudo)
+
+qemu/filesystem.qcow2: Dockerfile $(EBF_OBJ) $(LOAD_SCRIPT) $(STATUS_SCRIPT) $(UNLOAD_SCRIPT)
+	# build filesystem image and store as tar archive
+	DOCKER_BUILDKIT=1 ${SU_DOCKER} docker build --output "type=tar,dest=qemu/filesystem.tar" .
+	# convert tar to qcow2 image
+	${SU_LVIRTD} virt-make-fs --format=qcow2 --size=+100M qemu/filesystem.tar qemu/filesystem-large.qcow2
+	# reduce size of image
+	qemu-img convert qemu/filesystem-large.qcow2 -O qcow2 qemu/filesystem.qcow2
+
+qemu: build qemu/filesystem.qcow2
+	rm -f qemu/filesystem-diff.qcow2
+	${SU_LVIRTD} qemu-img create -f qcow2 -b filesystem.qcow2 -F qcow2 qemu/filesystem-diff.qcow2
+	${SU_LVIRTD} qemu-system-x86_64 \
+		-cpu host \
+		-m 4G \
+		-smp 4 \
+		-kernel ./qemu/bzImage \
+		-append "console=ttyS0 root=/dev/sda rw" \
+		-drive file="./qemu/filesystem-diff.qcow2,format=qcow2" \
+		-enable-kvm \
+		-pidfile ./qemu/qemu.pid \
+		-nographic
+clean:
+	-rm -f qemu/*.qcow2 qemu/*.tar build/*
+
+.PHONY: qemu clean

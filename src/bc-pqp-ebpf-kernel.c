@@ -4,6 +4,9 @@
 #include <bpf/bpf_helpers.h>
 
 SEC("xdp")
-int xdp_prog_simple(struct xdp_md *ctx) { return XDP_PASS; }
+int xdp_prog_simple(struct xdp_md *ctx) {
+    bpf_trace_printk("our program called\n", 20);
+    return XDP_PASS;
+}
 
 char _license[] SEC("license") = "GPL";
