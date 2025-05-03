@@ -1,4 +1,4 @@
-ARG ALPINE_REVISION=latest@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88
+ARG ALPINE_REVISION=latest@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c
 FROM alpine:${ALPINE_REVISION} AS build
 RUN apk add linux-headers clang llvm elfutils-dev libbpf-dev xdp-tools make
 COPY ./src /root/src
