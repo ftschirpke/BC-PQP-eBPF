@@ -1,21 +1,20 @@
 # inspired by https://github.com/k8spacket/k8spacket/blob/master/tests/e2e/vm/filesystem/Dockerfile
 
 FROM ubuntu:24.04@sha256:f8b860e4f9036f2694571770da292642eebcc4c2ea0c70a1a9244c2a1d436cd9
-ARG BUILD_DIR=build
 
 RUN apt-get update
 # install systemd as initialization module
 RUN apt-get install --no-install-recommends --no-install-suggests -y systemd
-# install ssh to allow connect from outside
-RUN apt-get install -y openssh-server
 # install net-tools to enable eth0 network interface
 RUN apt-get install --no-install-recommends --no-install-suggests -y net-tools
+# install ssh to allow connect from outside
+RUN apt-get install -y openssh-server
 # tools for loading and unloading of the program
 RUN apt-get install -y xdp-tools
 # tracing bpf programs
 RUN apt-get install -y bpftrace
 # install send and observe packets
-RUN apt-get install -y iputils-ping tcpdump
+RUN apt-get install -y iputils-ping tcpdump iproute2
 # tmux
 RUN apt-get install -y tmux
 
@@ -59,12 +58,6 @@ RUN echo "" > /etc/motd
 # set hostname
 RUN echo "ebpf" > /etc/hostname
 
-COPY ${BUILD_DIR}/load.sh /root/
-COPY ${BUILD_DIR}/status.sh /root/
-COPY ${BUILD_DIR}/unload.sh /root/
-COPY ${BUILD_DIR}/bc-pqp-ebpf-kernel.o /root/
-COPY dump.sh /root/
-COPY ping.sh /root/
-COPY trace.sh /root/
-
+COPY scripts /root/
+COPY build/bc-pqp-ebpf-kernel.o /root/
 

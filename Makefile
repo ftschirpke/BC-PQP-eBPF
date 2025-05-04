@@ -64,31 +64,14 @@ $(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(LIBBPF_OBJ)
 		-o $(@:.o=.ll) $<
 	$(LLC) -march=bpf -filetype=obj -o $@ $(@:.o=.ll)
 
-NETWORK_INTERFACE = eth0
-
-LOAD_SCRIPT=$(BUILD_DIR)/load.sh
-STATUS_SCRIPT=$(BUILD_DIR)/status.sh
-UNLOAD_SCRIPT=$(BUILD_DIR)/unload.sh
-
-$(LOAD_SCRIPT):
-	echo "#!/bin/sh" > $@
-	echo "xdp-loader load -m skb $(NETWORK_INTERFACE) $(EBPF_OBJ:$(BUILD_DIR)/%=%)" >> $@
-
-$(STATUS_SCRIPT):
-	echo "#!/bin/sh" > $@
-	echo "xdp-loader status $(NETWORK_INTERFACE)" >> $@
-
-$(UNLOAD_SCRIPT):
-	echo "#!/bin/sh" > $@
-	echo "if [ \$$# -ne 1 ]; then if=\"-a\"; else if=\"-i \$$1\"; fi" >> $@
-	echo "xdp-loader unload $(NETWORK_INTERFACE) \$$if" >> $@
-
 # === BUILDING THE VIRTUAL MACHINE ===
 
 SU_DOCKER=$(shell id -nGz "${USER}" | grep -qzxF "docker" || echo sudo)
 SU_LVIRTD=$(shell id -nGz "${USER}" | grep -qzxF "libvirtd" || echo sudo)
 
-qemu/filesystem.qcow2: Dockerfile $(EBF_OBJ) $(LOAD_SCRIPT) $(STATUS_SCRIPT) $(UNLOAD_SCRIPT)
+SCRIPTS = $(wildcard scripts/*)
+
+qemu/filesystem.qcow2: Dockerfile $(EBF_OBJ) $(SCRIPTS)
 	# build filesystem image and store as tar archive
 	DOCKER_BUILDKIT=1 ${SU_DOCKER} docker build --output "type=tar,dest=qemu/filesystem.tar" .
 	# convert tar to qcow2 image
@@ -108,6 +91,8 @@ qemu: build qemu/filesystem.qcow2
 		-drive file="./qemu/filesystem-diff.qcow2,format=qcow2" \
 		-enable-kvm \
 		-pidfile ./qemu/qemu.pid \
+		-netdev bridge,id=net0,br=br0,helper=/usr/lib/qemu/qemu-bridge-helper \
+		-device e1000,netdev=net0 \
 		-nographic
 clean:
 	-rm -f qemu/*.qcow2 qemu/*.tar build/*
