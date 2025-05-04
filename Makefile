@@ -71,7 +71,7 @@ qemu/filesystem.qcow2: Dockerfile $(EBF_OBJ)
 	# build filesystem image and store as tar archive
 	DOCKER_BUILDKIT=1 ${SU_DOCKER} docker build --build-arg FLAVOR=${FLAVOR} --output "type=tar,dest=qemu/filesystem.tar" .
 	# extract kernel
-	tar --extract --file=qemu/filesystem.tar boot/vmlinuz-${FLAVOR} boot/initramfs-${FLAVOR} boot/config-6.12.26-1-${FLAVOR}
+	tar --extract --file=qemu/filesystem.tar --wildcards "boot/*"
 	# convert tar to qcow2 image
 	${SU_LVIRTD} virt-make-fs --partition --type=ext4 --format=qcow2 --size=+100M qemu/filesystem.tar qemu/filesystem.qcow2
 
@@ -81,7 +81,7 @@ qemu: qemu/filesystem.qcow2
 		-m 4G \
 		-smp 4 \
 		-nic user,model=virtio-net-pci \
-		-kernel ./boot/vmlinuz-${FLAVOR} \
+		-kernel ./qemu/bzImage \
 		-initrd ./boot/initramfs-${FLAVOR} \
 		-append "rootfstype=ext4 console=ttyS0 root=/dev/sda1 rw" \
 		-hda ./qemu/filesystem.qcow2 \

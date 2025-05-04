@@ -1,6 +1,6 @@
 ARG ALPINE_REVISION=edge@sha256:115729ec5cb049ba6359c3ab005ac742012d92bbaa5b8bc1a878f1e8f62c0cb8
 FROM alpine:${ALPINE_REVISION} AS build
-RUN apk add linux-headers clang llvm elfutils-dev libbpf-dev xdp-tools make pahole
+RUN apk add linux-headers clang llvm elfutils-dev libbpf-dev xdp-tools make
 COPY ./src /root/src
 COPY ./Makefile /root/Makefile
 WORKDIR /root
@@ -11,7 +11,7 @@ FROM alpine:${ALPINE_REVISION}
 ARG FLAVOR
 
 # kernel, autologin, init system (used for networking)
-RUN apk add linux-${FLAVOR} agetty openrc xdp-tools pahole
+RUN apk add linux-${FLAVOR} agetty openrc xdp-tools
 # debug stuff, in a new layer to avoid unnecessary rebuilds
 RUN apk add 
 
