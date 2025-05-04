@@ -17,4 +17,3 @@ else
 fi
 
 xdp-loader unload eth0 $if
-
