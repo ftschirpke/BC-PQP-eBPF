@@ -24,7 +24,7 @@ RUN echo "root:root" | chpasswd
 RUN echo "auto lo" > /etc/network/interfaces
 RUN echo "iface lo inet loopback" >> /etc/network/interfaces
 RUN echo "auto eth0" >> /etc/network/interfaces
-RUN echo "iface eth0 inet dhcp" >> /etc/network/interfaces
+# RUN echo "iface eth0 inet dhcp" >> /etc/network/interfaces
 RUN rc-update add networking boot
 
 # disable welcome prompt
