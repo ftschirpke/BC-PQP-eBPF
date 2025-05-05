@@ -1,4 +1,4 @@
-ARG ALPINE_REVISION=edge@sha256:115729ec5cb049ba6359c3ab005ac742012d92bbaa5b8bc1a878f1e8f62c0cb8
+ARG ALPINE_REVISION=3.21@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c
 FROM alpine:${ALPINE_REVISION} AS build
 RUN apk add linux-headers clang llvm elfutils-dev libbpf-dev xdp-tools make
 COPY ./src /root/src
@@ -33,6 +33,9 @@ RUN echo "" > /etc/motd
 # set hostname
 RUN echo "ebpf" > /etc/hostname
 # creates the bpffs
-RUN rc-update add sysfs boot
+RUN echo "#!/sbin/openrc-run" > /etc/init.d/bpffs
+RUN echo "mount -n -t bpf -o nodev,noexec,nosuid bpf /sys/fs/bpf" >> /etc/init.d/bpffs
+RUN chmod +x /etc/init.d/bpffs
+RUN rc-update add bpffs boot
 
 COPY --from=build --chmod=700 /root/build/* /root/
