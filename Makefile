@@ -53,12 +53,11 @@ $(LIBXDP_OBJ):
 
 build: $(EBPF_OBJ)
 
-$(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c $(LIBBPF_OBJ)
+$(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(BUILD_DIR)
 	$(CLANG) -S \
 	    -target bpf \
 	    -D __BPF_TRACING__ \
-	    $(INCLUDE) \
 	    $(WARN_FLAGS) \
 	    -emit-llvm -c -g \
 		-o $(@:.o=.ll) $<
@@ -79,7 +78,7 @@ qemu/filesystem.qcow2: Dockerfile $(EBF_OBJ) $(SCRIPTS)
 	# reduce size of image
 	qemu-img convert qemu/filesystem-large.qcow2 -O qcow2 qemu/filesystem.qcow2
 
-qemu: build qemu/filesystem.qcow2
+qemu: qemu/filesystem.qcow2
 	rm -f qemu/filesystem-diff.qcow2
 	${SU_LVIRTD} qemu-img create -f qcow2 -b filesystem.qcow2 -F qcow2 qemu/filesystem-diff.qcow2
 	${SU_LVIRTD} qemu-system-x86_64 \

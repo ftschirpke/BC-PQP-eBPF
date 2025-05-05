@@ -1,20 +1,28 @@
 # inspired by https://github.com/k8spacket/k8spacket/blob/master/tests/e2e/vm/filesystem/Dockerfile
 
-FROM ubuntu:24.04@sha256:f8b860e4f9036f2694571770da292642eebcc4c2ea0c70a1a9244c2a1d436cd9
+FROM ubuntu:24.04@sha256:f8b860e4f9036f2694571770da292642eebcc4c2ea0c70a1a9244c2a1d436cd9 AS base
 
 RUN apt-get update
+
+FROM base AS build
+
+RUN apt-get install -y linux-headers-virtual clang llvm libelf-dev libbpf-dev libxdp-dev make gcc-multilib
+
+COPY ./src /root/src
+COPY ./Makefile /root/Makefile
+WORKDIR /root
+RUN make build
+
+FROM base AS vm
+
 # install systemd as initialization module
 RUN apt-get install --no-install-recommends --no-install-suggests -y systemd
 # install net-tools to enable eth0 network interface
 RUN apt-get install --no-install-recommends --no-install-suggests -y net-tools
 # install ssh to allow connect from outside
 RUN apt-get install -y openssh-server
-# tools for loading and unloading of the program
-RUN apt-get install -y xdp-tools
-# tracing bpf programs
-RUN apt-get install -y bpftrace
 # install send and observe packets
-RUN apt-get install -y iputils-ping tcpdump iproute2
+RUN apt-get install -y iputils-ping tcpdump iproute2 xdp-tools
 # tmux
 RUN apt-get install -y tmux
 
@@ -58,6 +66,6 @@ RUN echo "" > /etc/motd
 # set hostname
 RUN echo "ebpf" > /etc/hostname
 
-COPY scripts /root/
-COPY build/bc-pqp-ebpf-kernel.o /root/
+COPY --from=build /root/build/* /root/
+COPY --chmod=700 scripts /root/
 
