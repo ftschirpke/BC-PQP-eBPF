@@ -40,27 +40,6 @@ $(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 		-o $(@:.o=.ll) $<
 	$(LLC) -march=bpf -filetype=obj -o $@ $(@:.o=.ll)
 
-NETWORK_INTERFACE = lo
-
-LOAD_SCRIPT=$(BUILD_DIR)/load.sh
-STATUS_SCRIPT=$(BUILD_DIR)/status.sh
-UNLOAD_SCRIPT=$(BUILD_DIR)/unload.sh
-
-$(LOAD_SCRIPT):
-	echo "#!/bin/sh" > $@
-	echo "xdp-loader load -m skb $(NETWORK_INTERFACE) $(EBPF_OBJ:$(BUILD_DIR)/%=%)" >> $@
-
-$(STATUS_SCRIPT):
-	echo "#!/bin/sh" > $@
-	echo "xdp-loader status $(NETWORK_INTERFACE)" >> $@
-
-$(UNLOAD_SCRIPT):
-	echo "#!/bin/sh" > $@
-	echo "if [ \$$# -ne 1 ]; then if=\"-a\"; else if=\"-i \$$1\"; fi" >> $@
-	echo "xdp-loader unload $(NETWORK_INTERFACE) \$$if" >> $@
-
-script: $(LOAD_SCRIPT) $(STATUS_SCRIPT) $(UNLOAD_SCRIPT)
-
 # === BUILDING THE VIRTUAL MACHINE ===
 
 SU_DOCKER=$(shell id -nGz "${USER}" | grep -qzxF "docker" || echo sudo)
@@ -87,6 +66,8 @@ qemu: qemu/filesystem.qcow2
 		-hda ./qemu/filesystem.qcow2 \
 		-enable-kvm \
 		-pidfile ./qemu/qemu.pid \
+		-netdev bridge,id=net0,br=br0,helper=/usr/lib/qemu/qemu-bridge-helper \
+		-device e1000,netdev=net0 \
 		-nographic
 clean:
 	-rm -f qemu/*.qcow2 qemu/*.tar build/* boot/*

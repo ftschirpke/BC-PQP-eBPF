@@ -1,19 +1,19 @@
 ARG ALPINE_REVISION=3.21@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c
 FROM alpine:${ALPINE_REVISION} AS build
-RUN apk add linux-headers clang llvm elfutils-dev libbpf-dev xdp-tools make
+RUN apk add linux-headers clang llvm elfutils-dev libbpf-dev libxdp-dev xdp-tools make
 COPY ./src /root/src
 COPY ./Makefile /root/Makefile
 WORKDIR /root
-RUN make build script
+RUN make build
 
 # inspired by https://github.com/k8spacket/k8spacket/blob/master/tests/e2e/vm/filesystem/Dockerfile
 FROM alpine:${ALPINE_REVISION}
 ARG FLAVOR
 
 # kernel, autologin, init system (used for networking)
-RUN apk add linux-${FLAVOR} agetty openrc xdp-tools
+RUN apk add linux-${FLAVOR} agetty openrc xdp-tools iproute2 iputils-ping tcpdump
 # debug stuff, in a new layer to avoid unnecessary rebuilds
-RUN apk add 
+RUN apk add tmux
 
 # enable serial port for login
 RUN echo "ttyS0::respawn:/sbin/agetty --autologin root ttyS0 vt100\n" >> /etc/inittab
@@ -38,4 +38,5 @@ RUN echo "mount -n -t bpf -o nodev,noexec,nosuid bpf /sys/fs/bpf" >> /etc/init.d
 RUN chmod +x /etc/init.d/bpffs
 RUN rc-update add bpffs boot
 
-COPY --from=build --chmod=700 /root/build/* /root/
+COPY --from=build /root/build/* /root/
+COPY --chmod=700 scripts/* /root/
