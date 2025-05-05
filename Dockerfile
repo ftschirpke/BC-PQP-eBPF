@@ -38,5 +38,8 @@ RUN echo "mount -n -t bpf -o nodev,noexec,nosuid bpf /sys/fs/bpf" >> /etc/init.d
 RUN chmod +x /etc/init.d/bpffs
 RUN rc-update add bpffs boot
 
+# mount debug fs
+RUN echo "debugfs  /sys/kernel/debug  debugfs  defaults  0  0" >> /etc/fstab
+
 COPY --from=build /root/build/* /root/
 COPY --chmod=700 scripts/* /root/
