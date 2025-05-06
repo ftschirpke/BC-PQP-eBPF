@@ -36,6 +36,7 @@ $(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	    -target bpf \
 	    -D __BPF_TRACING__ \
 	    $(WARN_FLAGS) \
+		-O2 \
 	    -emit-llvm -g \
 		-o $(@:.o=.ll) $<
 	$(LLC) -march=bpf -filetype=obj -o $@ $(@:.o=.ll)
@@ -66,8 +67,12 @@ qemu: qemu/filesystem.qcow2
 		-enable-kvm \
 		-pidfile ./qemu/qemu.pid \
 		-netdev bridge,id=net0,br=br0,helper=/usr/lib/qemu/qemu-bridge-helper \
-		-device e1000,netdev=net0 \
+		-device virtio-net-pci,netdev=net0,mq=on,vectors=10 \
 		-nographic
+
+# -netdev tap,id=net0,ifname=tap0,script=no,downscript=no,vhost=on,queues=4 \
+# -device virtio-net-pci,netdev=net0,mq=on,vectors=10 \
+
 clean:
 	-rm -f qemu/*.qcow2 qemu/*.tar build/* boot/*
 
