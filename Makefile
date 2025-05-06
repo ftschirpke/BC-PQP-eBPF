@@ -34,7 +34,7 @@ $(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(BUILD_DIR)
 	$(CLANG) -S \
 	    -target bpf \
-		-O2 \
+        -O2 \
 	    -D __BPF_TRACING__ \
 	    $(WARN_FLAGS) \
 	    -emit-llvm -g \
