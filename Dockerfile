@@ -32,10 +32,8 @@ RUN echo "" > /etc/motd
 
 # set hostname
 RUN echo "ebpf" > /etc/hostname
-# creates the bpffs
-RUN echo "#!/sbin/openrc-run" > /etc/init.d/bpffs
-RUN echo "mount -n -t bpf -o nodev,noexec,nosuid bpf /sys/fs/bpf" >> /etc/init.d/bpffs
-RUN chmod +x /etc/init.d/bpffs
+# create the bpffs
+COPY --chmod=700 ./services/bpffs /etc/init.d/bpffs
 RUN rc-update add bpffs boot
 
 COPY --from=build --chmod=700 /root/build/* /root/
