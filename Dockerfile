@@ -35,5 +35,6 @@ RUN echo "ebpf" > /etc/hostname
 # create the bpffs
 COPY --chmod=700 ./services/bpffs /etc/init.d/bpffs
 RUN rc-update add bpffs boot
-
+# remove services that don't work in our environment and aren't needed
+RUN rm -f /etc/init.d/machine-id /etc/init.d/hwdrivers
 COPY --from=build --chmod=700 /root/build/* /root/
