@@ -31,15 +31,15 @@ SHARED_OBJ = $(addprefix $(BUILD_DIR)/,$(SHARED_C:%.c=%.o))
 build: $(EBPF_OBJ) 
 
 $(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
-    @mkdir -p $(BUILD_DIR)
-    $(CLANG) -S \
-        -target bpf \
-        -O2 \
-        -D __BPF_TRACING__ \
-        $(WARN_FLAGS) \
-        -emit-llvm -g \
-        -o $(@:.o=.ll) $<
-    $(LLC) -march=bpf -filetype=obj -o $@ $(@:.o=.ll)
+	@mkdir -p $(BUILD_DIR)
+	$(CLANG) -S \
+		-target bpf \
+		-O2 \
+		-D __BPF_TRACING__ \
+		$(WARN_FLAGS) \
+		-emit-llvm -g \
+		-o $(@:.o=.ll) $<
+	$(LLC) -march=bpf -filetype=obj -o $@ $(@:.o=.ll)
 
 NETWORK_INTERFACE = lo
 
@@ -48,17 +48,17 @@ STATUS_SCRIPT=$(BUILD_DIR)/status.sh
 UNLOAD_SCRIPT=$(BUILD_DIR)/unload.sh
 
 $(LOAD_SCRIPT):
-    echo "#!/bin/sh" > $@
-    echo "xdp-loader load -m skb $(NETWORK_INTERFACE) $(EBPF_OBJ:$(BUILD_DIR)/%=%)" >> $@
+	echo "#!/bin/sh" > $@
+	echo "xdp-loader load -m skb $(NETWORK_INTERFACE) $(EBPF_OBJ:$(BUILD_DIR)/%=%)" >> $@
 
 $(STATUS_SCRIPT):
-    echo "#!/bin/sh" > $@
-    echo "xdp-loader status $(NETWORK_INTERFACE)" >> $@
+	echo "#!/bin/sh" > $@
+	echo "xdp-loader status $(NETWORK_INTERFACE)" >> $@
 
 $(UNLOAD_SCRIPT):
-    echo "#!/bin/sh" > $@
-    echo "if [ \$$# -ne 1 ]; then if=\"-a\"; else if=\"-i \$$1\"; fi" >> $@
-    echo "xdp-loader unload $(NETWORK_INTERFACE) \$$if" >> $@
+	echo "#!/bin/sh" > $@
+	echo "if [ \$$# -ne 1 ]; then if=\"-a\"; else if=\"-i \$$1\"; fi" >> $@
+	echo "xdp-loader unload $(NETWORK_INTERFACE) \$$if" >> $@
 
 script: $(LOAD_SCRIPT) $(STATUS_SCRIPT) $(UNLOAD_SCRIPT)
 
@@ -69,27 +69,27 @@ SU_LVIRTD=$(shell id -nGz "${USER}" | grep -qzxF "libvirtd" || echo sudo)
 FLAVOR=virt
 
 qemu/filesystem.qcow2: Dockerfile $(EBF_OBJ) 
-    # build filesystem image and store as tar archive
-    DOCKER_BUILDKIT=1 ${SU_DOCKER} docker build --build-arg FLAVOR=${FLAVOR} --output "type=tar,dest=qemu/filesystem.tar" .
-    # extract kernel
-    tar --extract --file=qemu/filesystem.tar --wildcards "boot/*"
-    # convert tar to qcow2 image
-    ${SU_LVIRTD} virt-make-fs --partition --type=ext4 --format=qcow2 --size=+100M qemu/filesystem.tar qemu/filesystem.qcow2
+	# build filesystem image and store as tar archive
+	DOCKER_BUILDKIT=1 ${SU_DOCKER} docker build --build-arg FLAVOR=${FLAVOR} --output "type=tar,dest=qemu/filesystem.tar" .
+	# extract kernel
+	tar --extract --file=qemu/filesystem.tar --wildcards "boot/*"
+	# convert tar to qcow2 image
+	${SU_LVIRTD} virt-make-fs --partition --type=ext4 --format=qcow2 --size=+100M qemu/filesystem.tar qemu/filesystem.qcow2
 
 qemu: qemu/filesystem.qcow2
-    ${SU_LVIRTD} qemu-system-x86_64 \
-        -cpu host \
-        -m 4G \
-        -smp 4 \
-        -nic user,model=virtio-net-pci \
-        -kernel ./boot/vmlinuz-${FLAVOR} \
-        -initrd ./boot/initramfs-${FLAVOR} \
-        -append "rootfstype=ext4 console=ttyS0 root=/dev/sda1 rw" \
-        -hda ./qemu/filesystem.qcow2 \
-        -enable-kvm \
-        -pidfile ./qemu/qemu.pid \
-        -nographic
+	${SU_LVIRTD} qemu-system-x86_64 \
+		-cpu host \
+		-m 4G \
+		-smp 4 \
+		-nic user,model=virtio-net-pci \
+		-kernel ./boot/vmlinuz-${FLAVOR} \
+		-initrd ./boot/initramfs-${FLAVOR} \
+		-append "rootfstype=ext4 console=ttyS0 root=/dev/sda1 rw" \
+		-hda ./qemu/filesystem.qcow2 \
+		-enable-kvm \
+		-pidfile ./qemu/qemu.pid \
+		-nographic
 clean:
-    -rm -f qemu/*.qcow2 qemu/*.tar build/* boot/*
+	-rm -f qemu/*.qcow2 qemu/*.tar build/* boot/*
 
 .PHONY: qemu clean
