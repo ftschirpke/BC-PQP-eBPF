@@ -33,10 +33,11 @@ build: $(EBPF_OBJ)
 $(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(BUILD_DIR)
 	$(CLANG) -S \
-	    -target bpf \
-	    -D __BPF_TRACING__ \
-	    $(WARN_FLAGS) \
-	    -emit-llvm -g \
+		-target bpf \
+		-O2 \
+		-D __BPF_TRACING__ \
+		$(WARN_FLAGS) \
+		-emit-llvm -g \
 		-o $(@:.o=.ll) $<
 	$(LLC) -march=bpf -filetype=obj -o $@ $(@:.o=.ll)
 
@@ -81,7 +82,7 @@ qemu: qemu/filesystem.qcow2
 		-m 4G \
 		-smp 4 \
 		-nic user,model=virtio-net-pci \
-		-kernel ./qemu/bzImage \
+		-kernel ./boot/vmlinuz-${FLAVOR} \
 		-initrd ./boot/initramfs-${FLAVOR} \
 		-append "rootfstype=ext4 console=ttyS0 root=/dev/sda1 rw" \
 		-hda ./qemu/filesystem.qcow2 \
