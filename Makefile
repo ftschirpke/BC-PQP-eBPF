@@ -3,8 +3,6 @@
 all: qemu
 
 EBPF_SRC = bc-pqp-ebpf-kernel.c
-USER_SRC = 
-SHARED_SRC = 
 
 # === BUILDING THE SOURCE CODE ===
 
@@ -14,19 +12,13 @@ BUILD_DIR = build
 LLC = llc
 CLANG = clang
 
+C_FLAGS = -O2
 WARN_FLAGS = -Wall -Wno-unused-value -Wno-pointer-sign -Wno-compare-distinct-pointer-types -Werror
-SHARED_FLAGS = -O2
 
 EBPF_HDR = 
-USER_HDR = 
-SHARED_HDR = 
 
 EBPF_C = $(filter %.c, $(EBPF_SRC))
-USER_C = $(filter %.c, $(USER_SRC))
-SHARED_C = $(filter %.c, $(SHARED_SRC))
 EBPF_OBJ = $(addprefix $(BUILD_DIR)/,$(EBPF_C:%.c=%.o))
-USER_OBJ = $(addprefix $(BUILD_DIR)/,$(USER_C:%.c=%.o))
-SHARED_OBJ = $(addprefix $(BUILD_DIR)/,$(SHARED_C:%.c=%.o))
 
 build: $(EBPF_OBJ) 
 
@@ -35,8 +27,8 @@ $(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CLANG) -S \
 	    -target bpf \
 	    -D __BPF_TRACING__ \
+		$(C_FLAGS) \
 	    $(WARN_FLAGS) \
-		-O2 \
 	    -emit-llvm -g \
 		-o $(@:.o=.ll) $<
 	$(LLC) -march=bpf -filetype=obj -o $@ $(@:.o=.ll)
@@ -69,9 +61,6 @@ qemu: qemu/filesystem.qcow2
 		-netdev bridge,id=net0,br=br0,helper=/usr/lib/qemu/qemu-bridge-helper \
 		-device virtio-net-pci,netdev=net0,mq=on,vectors=10 \
 		-nographic
-
-# -netdev tap,id=net0,ifname=tap0,script=no,downscript=no,vhost=on,queues=4 \
-# -device virtio-net-pci,netdev=net0,mq=on,vectors=10 \
 
 clean:
 	-rm -f qemu/*.qcow2 qemu/*.tar build/* boot/*
