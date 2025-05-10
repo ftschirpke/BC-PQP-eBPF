@@ -46,6 +46,9 @@ qemu/filesystem.qcow2: Dockerfile $(EBF_OBJ)
 	tar --extract --file=qemu/filesystem.tar --wildcards "boot/*"
 	# convert tar to qcow2 image
 	${SU_LVIRTD} virt-make-fs --partition --type=ext4 --format=qcow2 --size=+100M qemu/filesystem.tar qemu/filesystem.qcow2
+	${SU_LVIRTD} mv ./qemu/filesystem.qcow2 /var/lib/libvirt/images/bc-pqp-fs.qcow2
+	${SU_LVIRTD} mv ./boot/vmlinuz-${FLAVOR} /var/lib/libvirt/images/bc-pqp-vmlinux-${FLAVOR}
+	${SU_LVIRTD} mv ./boot/initramfs-${FLAVOR} /var/lib/libvirt/images/bc-pqp-initramfs-${FLAVOR}
 
 qemu: qemu/filesystem.qcow2
 	${SU_LVIRTD} virt-install \
@@ -54,9 +57,9 @@ qemu: qemu/filesystem.qcow2
 		--destroy-on-exit \
 		--vcpus 4 \
 		--memory=4096 \
-		--disk=./qemu/filesystem.qcow2 \
-		--boot kernel=./boot/vmlinuz-${FLAVOR},initrd=./boot/initramfs-${FLAVOR},kernel_args="rootfstype=ext4 console=ttyS0 root=/dev/vda1 rw" \
-		--network bridge=virbr0,model=virtio \
+		--disk=/var/lib/libvirt/images/bc-pqp-fs.qcow2 \
+		--boot kernel=/var/lib/libvirt/images/bc-pqp-vmlinux-${FLAVOR},initrd=/var/lib/libvirt/images/bc-pqp-initramfs-${FLAVOR},kernel_args="rootfstype=ext4 console=ttyS0 root=/dev/vda1 rw" \
+		--network bridge=br0,driver.queues=4 \
 		--os-variant=alpinelinux3.20 \
 		--graphics none \
 		--autoconsole text
