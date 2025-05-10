@@ -52,7 +52,6 @@ qemu: qemu/filesystem.qcow2
 		-cpu host \
 		-m 4G \
 		-smp 4 \
-		-nic user,model=virtio-net-pci \
 		-kernel ./boot/vmlinuz-${FLAVOR} \
 		-initrd ./boot/initramfs-${FLAVOR} \
 		-append "rootfstype=ext4 console=ttyS0 root=/dev/sda1 rw" \
