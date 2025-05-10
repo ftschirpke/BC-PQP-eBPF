@@ -48,20 +48,19 @@ qemu/filesystem.qcow2: Dockerfile $(EBF_OBJ)
 	${SU_LVIRTD} virt-make-fs --partition --type=ext4 --format=qcow2 --size=+100M qemu/filesystem.tar qemu/filesystem.qcow2
 
 qemu: qemu/filesystem.qcow2
-	${SU_LVIRTD} qemu-system-x86_64 \
-		-cpu host \
-		-m 4G \
-		-smp 4 \
-		-kernel ./boot/vmlinuz-${FLAVOR} \
-		-initrd ./boot/initramfs-${FLAVOR} \
-		-append "rootfstype=ext4 console=ttyS0 root=/dev/sda1 rw" \
-		-hda ./qemu/filesystem.qcow2 \
-		-enable-kvm \
-		-pidfile ./qemu/qemu.pid \
-		-netdev bridge,id=net0,br=br0,helper=/usr/lib/qemu/qemu-bridge-helper \
-		-device virtio-net-pci,netdev=net0,mq=on,vectors=10 \
-		-nographic
-
+	${SU_LVIRTD} virt-install \
+		--name bc-pqp-ebpf \
+		--transient \
+		--destroy-on-exit \
+		--vcpus 4 \
+		--memory=4096 \
+		--disk=./qemu/filesystem.qcow2 \
+		--boot kernel=./boot/vmlinuz-${FLAVOR},initrd=./boot/initramfs-${FLAVOR},kernel_args="rootfstype=ext4 console=ttyS0 root=/dev/vda1 rw" \
+		--network bridge=virbr0,model=virtio \
+		--os-variant=alpinelinux3.20 \
+		--graphics none \
+		--autoconsole text
+		
 clean:
 	-rm -f qemu/*.qcow2 qemu/*.tar build/* boot/*
 
