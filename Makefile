@@ -3,8 +3,6 @@
 all: qemu
 
 EBPF_SRC = bc-pqp-ebpf-kernel.c
-USER_SRC = 
-SHARED_SRC = 
 
 # === BUILDING THE SOURCE CODE ===
 
@@ -14,53 +12,26 @@ BUILD_DIR = build
 LLC = llc
 CLANG = clang
 
+C_FLAGS = -O2
 WARN_FLAGS = -Wall -Wno-unused-value -Wno-pointer-sign -Wno-compare-distinct-pointer-types -Werror
-SHARED_FLAGS = -O2
 
 EBPF_HDR = 
-USER_HDR = 
-SHARED_HDR = 
 
 EBPF_C = $(filter %.c, $(EBPF_SRC))
-USER_C = $(filter %.c, $(USER_SRC))
-SHARED_C = $(filter %.c, $(SHARED_SRC))
 EBPF_OBJ = $(addprefix $(BUILD_DIR)/,$(EBPF_C:%.c=%.o))
-USER_OBJ = $(addprefix $(BUILD_DIR)/,$(USER_C:%.c=%.o))
-SHARED_OBJ = $(addprefix $(BUILD_DIR)/,$(SHARED_C:%.c=%.o))
 
 build: $(EBPF_OBJ) 
 
 $(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(BUILD_DIR)
 	$(CLANG) -S \
-		-target bpf \
-		-O2 \
-		-D __BPF_TRACING__ \
-		$(WARN_FLAGS) \
-		-emit-llvm -g \
+	    -target bpf \
+	    -D __BPF_TRACING__ \
+		$(C_FLAGS) \
+	    $(WARN_FLAGS) \
+	    -emit-llvm -g \
 		-o $(@:.o=.ll) $<
 	$(LLC) -march=bpf -filetype=obj -o $@ $(@:.o=.ll)
-
-NETWORK_INTERFACE = lo
-
-LOAD_SCRIPT=$(BUILD_DIR)/load.sh
-STATUS_SCRIPT=$(BUILD_DIR)/status.sh
-UNLOAD_SCRIPT=$(BUILD_DIR)/unload.sh
-
-$(LOAD_SCRIPT):
-	echo "#!/bin/sh" > $@
-	echo "xdp-loader load -m skb $(NETWORK_INTERFACE) $(EBPF_OBJ:$(BUILD_DIR)/%=%)" >> $@
-
-$(STATUS_SCRIPT):
-	echo "#!/bin/sh" > $@
-	echo "xdp-loader status $(NETWORK_INTERFACE)" >> $@
-
-$(UNLOAD_SCRIPT):
-	echo "#!/bin/sh" > $@
-	echo "if [ \$$# -ne 1 ]; then if=\"-a\"; else if=\"-i \$$1\"; fi" >> $@
-	echo "xdp-loader unload $(NETWORK_INTERFACE) \$$if" >> $@
-
-script: $(LOAD_SCRIPT) $(STATUS_SCRIPT) $(UNLOAD_SCRIPT)
 
 # === BUILDING THE VIRTUAL MACHINE ===
 
@@ -81,14 +52,16 @@ qemu: qemu/filesystem.qcow2
 		-cpu host \
 		-m 4G \
 		-smp 4 \
-		-nic user,model=virtio-net-pci \
 		-kernel ./boot/vmlinuz-${FLAVOR} \
 		-initrd ./boot/initramfs-${FLAVOR} \
 		-append "rootfstype=ext4 console=ttyS0 root=/dev/sda1 rw" \
 		-hda ./qemu/filesystem.qcow2 \
 		-enable-kvm \
 		-pidfile ./qemu/qemu.pid \
+		-netdev bridge,id=net0,br=br0,helper=/usr/lib/qemu/qemu-bridge-helper \
+		-device virtio-net-pci,netdev=net0,mq=on,vectors=10 \
 		-nographic
+
 clean:
 	-rm -f qemu/*.qcow2 qemu/*.tar build/* boot/*
 
