@@ -35,10 +35,13 @@ RUN echo "ebpf" > /etc/hostname
 # create the bpffs
 COPY --chmod=700 ./services/bpffs /etc/init.d/bpffs
 RUN rc-update add bpffs boot
+# create the host-VM bridge
+COPY --chmod=700 ./services/bridge_setup /etc/init.d/bridge_setup
+RUN rc-update add bridge_setup boot
+# mount debug fs
+RUN rc-update add sysfs boot
 # remove services that don't work in our environment and aren't needed
 RUN rm -f /etc/init.d/machine-id /etc/init.d/hwdrivers
-# mount debug fs
-RUN echo "debugfs  /sys/kernel/debug  debugfs  defaults  0  0" >> /etc/fstab
 
 COPY --from=build /root/build/* /root/
 COPY --chmod=700 scripts/* /root/
