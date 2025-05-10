@@ -7,9 +7,42 @@
 #include <bpf/bpf_endian.h>
 #include <xdp/parsing_helpers.h>
 
+struct stats {
+    struct bpf_spin_lock semaphore;
+    __u32 counter;
+} __attribute__((aligned(8)));
+
+__u32 global_counter = 0;
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__type(key, __u32);
+	__type(value, struct stats);
+	__uint(max_entries, 100);
+} xdp_general_map SEC(".maps");
+
 SEC("xdp")
 int bc_pqp_xdp(struct xdp_md* ctx) {
     bpf_trace_printk("BC-PQP program called", 22);
+
+    __u32 key = 0;
+
+    struct stats *read_value = (struct stats *)bpf_map_lookup_elem(&xdp_general_map, &key);
+    if (read_value == NULL) {
+        bpf_trace_printk("Could not read map", 19);
+    } else {
+        __u32 read_counter_value;
+        bpf_spin_lock(&read_value->semaphore);
+        read_counter_value = read_value->counter++;
+        bpf_spin_unlock(&read_value->semaphore);
+
+        bpf_trace_printk("Handled %u == %u packets before", 32,
+            global_counter, 
+            read_counter_value
+        );
+
+        __sync_fetch_and_add(&global_counter, 1);
+    }
 
 	void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;
