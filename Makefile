@@ -46,12 +46,12 @@ qemu/filesystem.qcow2: Dockerfile $(EBF_OBJ)
 	tar --extract --file=qemu/filesystem.tar --wildcards "boot/*"
 	# convert tar to qcow2 image
 	${SU_LVIRTD} virt-make-fs --partition --type=ext4 --format=qcow2 --size=+100M qemu/filesystem.tar qemu/filesystem.qcow2
-	${SU_LVIRTD} mv ./qemu/filesystem.qcow2 /var/lib/libvirt/images/bc-pqp-fs.qcow2
-	${SU_LVIRTD} mv ./boot/vmlinuz-${FLAVOR} /var/lib/libvirt/images/bc-pqp-vmlinux-${FLAVOR}
-	${SU_LVIRTD} mv ./boot/initramfs-${FLAVOR} /var/lib/libvirt/images/bc-pqp-initramfs-${FLAVOR}
+	sudo mv ./qemu/filesystem.qcow2 /var/lib/libvirt/images/bc-pqp-fs.qcow2
+	sudo mv ./boot/vmlinuz-${FLAVOR} /var/lib/libvirt/images/bc-pqp-vmlinux-${FLAVOR}
+	sudo mv ./boot/initramfs-${FLAVOR} /var/lib/libvirt/images/bc-pqp-initramfs-${FLAVOR}
 
 qemu: qemu/filesystem.qcow2
-	${SU_LVIRTD} virt-install \
+	sudo virt-install \
 		--name bc-pqp-ebpf \
 		--transient \
 		--destroy-on-exit \
