@@ -7,6 +7,8 @@
 #include <bpf/bpf_endian.h>
 #include <xdp/parsing_helpers.h>
 
+#define RX_QUEUES 4
+
 struct stats {
     struct bpf_spin_lock semaphore;
     __u32 counter;
@@ -18,35 +20,51 @@ struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__type(key, __u32);
 	__type(value, struct stats);
-	__uint(max_entries, 100);
+	__uint(max_entries, RX_QUEUES + 1);
 } xdp_general_map SEC(".maps");
 
 SEC("xdp")
 int bc_pqp_xdp(struct xdp_md* ctx) {
-    bpf_trace_printk("BC-PQP program called", 22);
+    bpf_trace_printk("===== BC-PQP on queue %u =====", 31, ctx->rx_queue_index);
 
-    __u32 key = 0;
-
-    struct stats *read_value = (struct stats *)bpf_map_lookup_elem(&xdp_general_map, &key);
-    if (read_value == NULL) {
-        bpf_trace_printk("Could not read map", 19);
-    } else {
-        __u32 read_counter_value;
-        bpf_spin_lock(&read_value->semaphore);
-        read_counter_value = read_value->counter++;
-        bpf_spin_unlock(&read_value->semaphore);
-
-        bpf_trace_printk("Handled %u == %u packets before", 32,
-            global_counter, 
-            read_counter_value
-        );
-
-        __sync_fetch_and_add(&global_counter, 1);
+    if (ctx->rx_queue_index >= RX_QUEUES) {
+        bpf_trace_printk("Unexpected rx queue index: %u >= %u", 36, ctx->rx_queue_index, RX_QUEUES);
+        goto pass;
     }
 
-	void *data = (void *)(long)ctx->data;
+    __u32 queue_counter_value = 0;
+    __u32 key = ctx->rx_queue_index;
+    struct stats *queue_read = (struct stats *)bpf_map_lookup_elem(&xdp_general_map, &key);
+    if (queue_read == NULL) {
+        bpf_trace_printk("Could not read queue-specific element from map", 47);
+    } else {
+        bpf_spin_lock(&queue_read->semaphore);
+        queue_counter_value = queue_read->counter++;
+        bpf_spin_unlock(&queue_read->semaphore);
+    }
+
+    __u32 total_counter_value = 0;
+    key = RX_QUEUES;
+    struct stats *total_read = (struct stats *)bpf_map_lookup_elem(&xdp_general_map, &key);
+    if (total_read == NULL) {
+        bpf_trace_printk("Could not read total element from map", 38);
+    } else {
+        bpf_spin_lock(&total_read->semaphore);
+        total_counter_value = total_read->counter++;
+        bpf_spin_unlock(&total_read->semaphore);
+    }
+
+    bpf_trace_printk("Packet counters: QUEUE: %u, TOTAL: %u == %u",
+        44,
+        queue_counter_value,
+        total_counter_value,
+        global_counter
+    );
+    __sync_fetch_and_add(&global_counter, 1);
+
+    void *data = (void *)(long)ctx->data;
     void *data_end = (void *)(long)ctx->data_end;
-	struct hdr_cursor nh;
+    struct hdr_cursor nh;
     nh.pos = data;
 
     struct ethhdr *eth_header;
@@ -58,13 +76,13 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
 	struct ipv6hdr *ipv6_header;
 	if (eth_type == ETH_P_IP) {
 		int ipv4_type = parse_iphdr(&nh, data_end, &ipv4_header);
-        bpf_trace_printk("IPv4 type: 0x%04x (0x%04x is the expected ICMP)", 48, ipv4_type, IPPROTO_ICMP);
+        bpf_trace_printk("IPv4 type: 0x%04x (0x%04x is the expected ICMP, 0x%04x is TCP)", 63, ipv4_type, IPPROTO_ICMP, IPPROTO_TCP);
 		if (ipv4_type != IPPROTO_ICMP) {
 			goto pass;
         }
 	} else if (eth_type == ETH_P_IPV6) {
 		int ipv6_type = parse_ip6hdr(&nh, data_end, &ipv6_header);
-        bpf_trace_printk("IPv6 type: 0x%04x (0x%04x is the expected ICMPv6)", 50, ipv6_type, IPPROTO_ICMPV6);
+        bpf_trace_printk("IPv6 type: 0x%04x (0x%04x is the expected ICMPv6, 0x%04x is TCP)", 65, ipv6_type, IPPROTO_ICMPV6, IPPROTO_TCP);
 		if (ipv6_type != IPPROTO_ICMPV6) {
 			goto pass;
         }
