@@ -1,14 +1,14 @@
 BasedOnStyle: LLVM
 IndentWidth: 4
 ---
-Language: C
+Language: Cpp
 AccessModifierOffset: -4
 AlignAfterOpenBracket: BlockIndent
 BreakBeforeBinaryOperators: NonAssignment
 BreakBeforeBraces: Attach
 BreakConstructorInitializers: BeforeColon
 BreakBeforeTernaryOperators: true
-ColumnLimit: 120
+ColumnLimit: 80
 EmptyLineBeforeAccessModifier: Never
 IndentCaseLabels: true
 IndentRequiresClause: false
@@ -18,5 +18,5 @@ PenaltyReturnTypeOnItsOwnLine: 10000
 PenaltyBreakAssignment: 10000
 PointerAlignment: Left
 SpaceInEmptyBlock: false
-Standard: c23
+Standard: c++20
 ...
