@@ -12,7 +12,7 @@
 struct stats {
     struct bpf_spin_lock semaphore;
     __u32 counter;
-} __attribute__((aligned(8)));
+};
 
 __u32 global_counter = 0;
 

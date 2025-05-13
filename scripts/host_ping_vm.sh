@@ -13,4 +13,4 @@ sudo hping3 -S -p 80 -s 10000 -i 1 192.168.100.2
 # sudo hping3 -S -p 80 -s 10000 -i u1000 192.168.100.2
 
 # '--flood' sends packets without interval
-# sudo hping3 -S -p 80 -s 10000 --fload 192.168.100.2
+# sudo hping3 -S -p 80 -s 10000 --flood 192.168.100.2
