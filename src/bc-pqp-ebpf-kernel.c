@@ -9,8 +9,12 @@
 
 #define RX_QUEUES 4
 
-struct stats {
+#define ONE_SECOND 1e6 // 1s = 1e9 ns
+#define RATE 1e6       // 1 MB/s
+
+struct phantom_queue {
     struct bpf_spin_lock semaphore;
+    struct bpf_timer timer;
     __u32 counter;
 };
 
@@ -19,9 +23,27 @@ __u32 global_counter = 0;
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
-    __type(value, struct stats);
+    __type(value, struct phantom_queue);
     __uint(max_entries, RX_QUEUES + 1);
 } xdp_general_map SEC(".maps");
+
+static int timer_reset_callback(
+    void* map, __u32* key, struct phantom_queue* value
+) {
+    bpf_trace_printk("time reset callback on queue %u", 32, *key);
+    /* bpf_spin_lock(&value->semaphore); */
+    /* if (value->counter >= RATE) { */
+    /*     value->counter -= RATE; */
+    /* } else { */
+    /*     value->counter = 0; */
+    /* } */
+    /* bpf_spin_unlock(&value->semaphore); */
+
+    /* bpf_timer_set_callback(&value->timer, &timer_reset_callback); */
+    bpf_timer_start(&value->timer, ONE_SECOND, 0);
+
+    return 0;
+}
 
 SEC("xdp")
 int bc_pqp_xdp(struct xdp_md* ctx) {
@@ -37,22 +59,25 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
 
     __u32 queue_counter_value = 0;
     __u32 key = ctx->rx_queue_index;
-    struct stats* queue_read = (struct stats*)bpf_map_lookup_elem(
-        &xdp_general_map, &key
-    );
+    struct phantom_queue* queue_read = (struct phantom_queue*)
+        bpf_map_lookup_elem(&xdp_general_map, &key);
     if (queue_read == NULL) {
         bpf_trace_printk("Could not read queue-specific element from map", 47);
     } else {
         bpf_spin_lock(&queue_read->semaphore);
         queue_counter_value = queue_read->counter++;
         bpf_spin_unlock(&queue_read->semaphore);
+        if (queue_counter_value == 0) {
+            bpf_timer_init(&queue_read->timer, &xdp_general_map, 0);
+            bpf_timer_set_callback(&queue_read->timer, &timer_reset_callback);
+            bpf_timer_start(&queue_read->timer, ONE_SECOND, 0);
+        }
     }
 
     __u32 total_counter_value = 0;
     key = RX_QUEUES;
-    struct stats* total_read = (struct stats*)bpf_map_lookup_elem(
-        &xdp_general_map, &key
-    );
+    struct phantom_queue* total_read = (struct phantom_queue*)
+        bpf_map_lookup_elem(&xdp_general_map, &key);
     if (total_read == NULL) {
         bpf_trace_printk("Could not read total element from map", 38);
     } else {
