@@ -57,7 +57,7 @@ static __u64 try_increment_counter(
     __sync_fetch_and_add(&queue_read->counter, increment);
     __u64 new_counter = queue_read->counter;
     bpf_trace_printk(
-        "Packet counters: QUEUE: %u, COUNTER: %u, TIME: %u", 50, key,
+        "Packet counters: QUEUE: %u, COUNTER: %u, TIME: %lu", 51, key,
         new_counter, last_refresh
     );
     if (new_counter < RATE) {
