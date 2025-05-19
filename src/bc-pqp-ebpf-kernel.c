@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include "stdlib.h"
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/types.h>
@@ -13,12 +14,9 @@
 #define RATE 1e6       // 1 MB/s
 
 struct phantom_queue {
-    struct bpf_spin_lock semaphore;
-    struct bpf_timer timer;
+    __u64 time;
     __u32 counter;
 };
-
-__u32 global_counter = 0;
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -27,22 +25,56 @@ struct {
     __uint(max_entries, RX_QUEUES + 1);
 } xdp_general_map SEC(".maps");
 
-static int timer_reset_callback(
-    void* map, __u32* key, struct phantom_queue* value
+
+static __u64 try_increment_counter(
+    __u64 key, struct phantom_queue* queue_read
 ) {
-    bpf_trace_printk("time reset callback on queue %u", 32, *key);
-    /* bpf_spin_lock(&value->semaphore); */
-    /* if (value->counter >= RATE) { */
-    /*     value->counter -= RATE; */
-    /* } else { */
-    /*     value->counter = 0; */
-    /* } */
-    /* bpf_spin_unlock(&value->semaphore); */
+    // this function should give us better performance
+    __u64 now = bpf_ktime_get_coarse_ns();
+    __u64 last_refresh = queue_read->time;
 
-    /* bpf_timer_set_callback(&value->timer, &timer_reset_callback); */
-    bpf_timer_start(&value->timer, ONE_SECOND, 0);
+    if (now - last_refresh > ONE_SECOND) {
+        __u64 res = __sync_val_compare_and_swap(
+            &queue_read->time, last_refresh, now
+        );
 
-    return 0;
+        if (res == last_refresh) {
+            // success, reset the counter
+            bpf_trace_printk("timer reset: won race", 22);
+            queue_read->counter = 0;
+        } else {
+            bpf_trace_printk("timer reset: lost race", 23);
+        }
+    }
+    // todo: use packet size as increment
+    __u64 increment = 1;
+    // see https://github.com/llvm/llvm-project/issues/35921 vs
+    // https://docs.ebpf.io/linux/concepts/concurrency/
+    // atomic add seems to be broken right now
+    // we could alternatively use compare and swap, but the performance would probably suck
+    
+    // __u64 new_counter = __sync_fetch_and_add(&queue_read->counter,
+    // increment);
+    __sync_fetch_and_add(&queue_read->counter, increment);
+    __u64 new_counter = queue_read->counter;
+    bpf_trace_printk(
+        "Packet counters: QUEUE: %u, COUNTER: %u, TIME: %u", 50, key,
+        new_counter, last_refresh
+    );
+    if (new_counter < RATE) {
+        // we are allowed to continue, send the packages
+        // todo use bytecount instead of 1
+        bpf_trace_printk("counter increment: success", 27);
+        return 0;
+    } else {
+        // our package did not fit, so we drop it
+        // note: it may be that a smaller packet would have fit
+        // to be super-correct we would have to subtract our increment from the
+        // counter again this would add a lot of work for dropping packets, so
+        // we leave it.
+        bpf_trace_printk("counter increment: failure", 27);
+        return 1;
+    }
 }
 
 SEC("xdp")
@@ -56,125 +88,41 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
         );
         goto pass;
     }
-
-    __u32 queue_counter_value = 0;
+    // per queue
+    /*
     __u32 key = ctx->rx_queue_index;
     struct phantom_queue* queue_read = (struct phantom_queue*)
         bpf_map_lookup_elem(&xdp_general_map, &key);
     if (queue_read == NULL) {
         bpf_trace_printk("Could not read queue-specific element from map", 47);
     } else {
-        bpf_spin_lock(&queue_read->semaphore);
-        queue_counter_value = queue_read->counter++;
-        bpf_spin_unlock(&queue_read->semaphore);
-        if (queue_counter_value == 0) {
-            bpf_timer_init(&queue_read->timer, &xdp_general_map, 0);
-            bpf_timer_set_callback(&queue_read->timer, &timer_reset_callback);
-            bpf_timer_start(&queue_read->timer, ONE_SECOND, 0);
+        __u64 result = try_increment_counter(key, queue_read);
+        if (result == 0) {
+            goto pass;
+        } else {
+            goto drop;
         }
-    }
+    }*/
 
-    __u32 total_counter_value = 0;
-    key = RX_QUEUES;
-    struct phantom_queue* total_read = (struct phantom_queue*)
+    // total
+    __u32 key = RX_QUEUES;
+    struct phantom_queue* queue_read = (struct phantom_queue*)
         bpf_map_lookup_elem(&xdp_general_map, &key);
-    if (total_read == NULL) {
+    if (queue_read == NULL) {
         bpf_trace_printk("Could not read total element from map", 38);
     } else {
-        bpf_spin_lock(&total_read->semaphore);
-        total_counter_value = total_read->counter++;
-        bpf_spin_unlock(&total_read->semaphore);
-    }
-
-    bpf_trace_printk(
-        "Packet counters: QUEUE: %u, TOTAL: %u == %u", 44, queue_counter_value,
-        total_counter_value, global_counter
-    );
-    __sync_fetch_and_add(&global_counter, 1);
-
-    void* data = (void*)(long)ctx->data;
-    void* data_end = (void*)(long)ctx->data_end;
-    struct hdr_cursor nh;
-    nh.pos = data;
-
-    struct ethhdr* eth_header;
-    int eth_type = parse_ethhdr(&nh, data_end, &eth_header);
-    eth_type = bpf_ntohs(eth_type);
-    bpf_trace_printk(
-        "ETH type: 0x%04x (0x%04x is IPv4, 0x%04x is IPv6)", 50, eth_type,
-        ETH_P_IP, ETH_P_IPV6
-    );
-
-    struct iphdr* ipv4_header;
-    struct ipv6hdr* ipv6_header;
-    if (eth_type == ETH_P_IP) {
-        int ipv4_type = parse_iphdr(&nh, data_end, &ipv4_header);
-        bpf_trace_printk(
-            "IPv4 type: 0x%04x (0x%04x is the expected ICMP, 0x%04x is TCP)",
-            63, ipv4_type, IPPROTO_ICMP, IPPROTO_TCP
-        );
-        if (ipv4_type != IPPROTO_ICMP) {
+        __u64 result = try_increment_counter(key, queue_read);
+        if (result == 0) {
             goto pass;
+        } else {
+            goto drop;
         }
-    } else if (eth_type == ETH_P_IPV6) {
-        int ipv6_type = parse_ip6hdr(&nh, data_end, &ipv6_header);
-        bpf_trace_printk(
-            "IPv6 type: 0x%04x (0x%04x is the expected ICMPv6, 0x%04x is TCP)",
-            65, ipv6_type, IPPROTO_ICMPV6, IPPROTO_TCP
-        );
-        if (ipv6_type != IPPROTO_ICMPV6) {
-            goto pass;
-        }
-    } else {
-        goto pass;
     }
 
-    // swap source and destination IP address
-    __u16 echo_reply_type;
-    struct icmphdr_common* icmp_header;
-    int icmp_type = parse_icmphdr_common(&nh, data_end, &icmp_header);
-    if (eth_type == ETH_P_IP && icmp_type == ICMP_ECHO) {
-        __be32 tmp_saddr = ipv4_header->saddr;
-        ipv4_header->saddr = ipv4_header->daddr;
-        ipv4_header->daddr = tmp_saddr;
-        echo_reply_type = ICMP_ECHOREPLY;
-    } else if (eth_type == ETH_P_IPV6 && icmp_type == ICMPV6_ECHO_REQUEST) {
-        struct in6_addr tmp_saddr = ipv6_header->saddr;
-        ipv6_header->saddr = ipv6_header->daddr;
-        ipv6_header->daddr = tmp_saddr;
-        echo_reply_type = ICMPV6_ECHO_REPLY;
-    } else {
-        goto pass;
-    }
 
-    // swap source and destination MAC address
-    __u8 tmp_source[ETH_ALEN];
-    __builtin_memcpy(tmp_source, eth_header->h_source, ETH_ALEN);
-    __builtin_memcpy(eth_header->h_source, eth_header->h_dest, ETH_ALEN);
-    __builtin_memcpy(eth_header->h_dest, tmp_source, ETH_ALEN);
-
-    // compute new checksum; see:
-    // https://github.com/xdp-project/xdp-tutorial/blob/6d3aa8191da499fae8bd4fd5aa89fefa3184274f/packet-solutions/xdp_prog_kern_03.c#L34
-    __u16 old_checksum = icmp_header->cksum;
-    icmp_header->cksum = 0;
-    struct icmphdr_common old_icmp_header = *icmp_header;
-    icmp_header->type = echo_reply_type;
-    __u32 size = sizeof(struct icmphdr_common);
-    __u32 csum = bpf_csum_diff(
-        (__be32*)&old_icmp_header, size, (__be32*)icmp_header, size,
-        ~old_checksum
-    );
-    __u32 sum = (csum >> 16) + (csum & 0xffff);
-    sum += (sum >> 16);
-    icmp_header->cksum = ~sum;
-    bpf_trace_printk(
-        "Rewritten checksum 0x%04x -> 0x%04x", 36, old_checksum,
-        icmp_header->cksum
-    );
-
-    bpf_trace_printk("We are actually replying in XDP!", 33);
-    return XDP_TX;
-
+drop:
+    bpf_trace_printk("We are dropping the packet.", 28);
+    return XDP_DROP;
 pass:
     bpf_trace_printk("We are passing the packet to the kernel.", 41);
     return XDP_PASS;
