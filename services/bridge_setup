@@ -7,6 +7,7 @@ start()
     ebegin $description
 
     ip addr add 192.168.100.2/24 dev eth0
+    ip addr add fe80::5054:ff:fe80:2/64 dev eth0
     ip link set eth0 up
 
     eend $?
