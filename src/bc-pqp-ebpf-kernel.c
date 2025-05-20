@@ -9,12 +9,12 @@
 
 #define RX_QUEUES 4
 
-#define ONE_SECOND 1e6 // 1s = 1e9 ns
+#define ONE_SECOND 1e9 // 1s = 1e9 ns
 #define RATE 1e6       // 1 MB/s
 
 struct phantom_queue {
     __u64 time;
-    __u32 counter;
+    __u64 counter;
 };
 
 struct {
@@ -54,10 +54,10 @@ static __u64 try_increment_counter(
     
     // __u64 new_counter = __sync_fetch_and_add(&queue_read->counter,
     // increment);
-    __sync_fetch_and_add(&queue_read->counter, increment);
     __u64 new_counter = queue_read->counter;
+    __sync_fetch_and_add(&queue_read->counter, increment);
     bpf_trace_printk(
-        "Packet counters: QUEUE: %u, COUNTER: %u, TIME: %lu", 51, key,
+        "Packet counters: QUEUE: %u, COUNTER: %lu, TIME: %lu", 52, key,
         new_counter, last_refresh
     );
     if (new_counter < RATE) {
