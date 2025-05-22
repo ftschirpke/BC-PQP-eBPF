@@ -10,8 +10,8 @@ RUN make build
 FROM alpine:${ALPINE_REVISION}
 ARG FLAVOR
 
-# kernel, autologin, init system (used for networking)
-RUN apk add linux-${FLAVOR} agetty openrc xdp-tools iproute2 iputils-ping tcpdump ethtool iperf3
+# kernel, autologin, init system (used for networking), network tools
+RUN apk add linux-${FLAVOR} agetty openrc xdp-tools iproute2 iputils-ping tcpdump ethtool
 # debug stuff, in a new layer to avoid unnecessary rebuilds
 RUN apk add 
 
