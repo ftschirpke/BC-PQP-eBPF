@@ -59,7 +59,8 @@ qemu: qemu/filesystem.qcow2
 		--memory=4096 \
 		--disk=/var/lib/libvirt/images/bc-pqp-fs.qcow2 \
 		--boot kernel=/var/lib/libvirt/images/bc-pqp-vmlinux-${FLAVOR},initrd=/var/lib/libvirt/images/bc-pqp-initramfs-${FLAVOR},kernel_args="rootfstype=ext4 console=ttyS0 root=/dev/vda1 rw" \
-		--network bridge=br0,driver.queues=4 \
+		--network bridge=br1,driver.queues=4 \
+		--network bridge=br2,driver.queues=4 \
 		--os-variant=alpinelinux3.20 \
 		--graphics none \
 		--autoconsole text

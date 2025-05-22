@@ -6,9 +6,13 @@ start()
 {
     ebegin $description
 
-    ip addr add 192.168.100.2/24 dev eth0
-    ip addr add fe80::5054:ff:fe80:2/64 dev eth0
+    sysctl -w net.ipv4.ip_forward=1
+
+    ip addr add 192.168.101.100/24 dev eth0
     ip link set eth0 up
+
+    ip addr add 192.168.102.100/24 dev eth1
+    ip link set eth1 up
 
     eend $?
 
