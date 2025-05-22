@@ -7,6 +7,15 @@
 #include <bpf/bpf_helpers.h>
 #include <xdp/parsing_helpers.h>
 
+// flags allowed in bpf_timer_init
+// see also 
+// - https://github.com/tpapagian/go-ebpf-timer/blob/main/fentry.c 
+// - https://docs.ebpf.io/linux/concepts/timers/
+#define CLOCK_REALTIME 0
+#define CLOCK_MONOTONIC 1
+#define CLOCK_BOOTTIME 7
+
+
 #define RX_QUEUES 4
 
 #define ONE_SECOND 1e9 // 1s = 1e9 ns
@@ -14,7 +23,9 @@
 
 struct phantom_queue {
     __u64 time;
-    __u64 counter;
+    __u64 occupancy;
+    __u64 capacity;
+    struct bpf_timer policer;
 };
 
 struct {
@@ -25,46 +36,58 @@ struct {
 } xdp_general_map SEC(".maps");
 
 
+static __u32 policer_callback(
+    void* map, __u32* key, struct phantom_queue* queue
+) {
+    // reset occupancy
+    queue->occupancy = 0;
+
+    // reset the timer
+    __u64 res = bpf_timer_start(&queue->policer, ONE_SECOND, 0);
+    if (res) {
+        bpf_printk("error: could not reset policer in callback %ld", res);
+        return 0;
+    }
+    bpf_printk("reset occupancy for queue %u", 29, *key);
+    
+    return 0;
+}
+
 static __u64 try_increment_counter(
-    __u64 key, struct phantom_queue* queue_read
+    struct phantom_queue* queue, __u64 packet_size
 ) {
     // this function should give us better performance
     __u64 now = bpf_ktime_get_coarse_ns();
-    __u64 last_refresh = queue_read->time;
+    __u64 last_refresh = queue->time;
 
     if (now - last_refresh > ONE_SECOND) {
         __u64 res = __sync_val_compare_and_swap(
-            &queue_read->time, last_refresh, now
+            &queue->time, last_refresh, now
         );
 
         if (res == last_refresh) {
             // success, reset the counter
             bpf_trace_printk("timer reset: won race", 22);
-            queue_read->counter = 0;
+            queue->occupancy = 0;
         } else {
             bpf_trace_printk("timer reset: lost race", 23);
         }
     }
-    // todo: use packet size as increment
-    __u64 increment = 1;
     // see https://github.com/llvm/llvm-project/issues/35921 vs
     // https://docs.ebpf.io/linux/concepts/concurrency/
     // atomic add seems to be broken right now
-    // we could alternatively use compare and swap, but the performance would probably suck
-    
-    // __u64 new_counter = __sync_fetch_and_add(&queue_read->counter,
-    // increment);
-    __u64 new_counter = queue_read->counter;
-    __sync_fetch_and_add(&queue_read->counter, increment);
+    __u64 occupancy = queue->occupancy;
     bpf_trace_printk(
-        "Packet counters: QUEUE: %u, COUNTER: %lu, TIME: %lu", 52, key,
-        new_counter, last_refresh
+        "Packet counters: OCCUPANCY: %lu, TIME: %lu", 43, occupancy,
+        last_refresh
     );
-    if (new_counter < RATE) {
+    if (occupancy + packet_size <= queue->capacity) {
         // we are allowed to continue, send the packages
         // todo use bytecount instead of 1
         bpf_trace_printk("counter increment: success", 27);
-        return 0;
+        __sync_fetch_and_add(&queue->occupancy, packet_size);
+
+        return 1;
     } else {
         // our package did not fit, so we drop it
         // note: it may be that a smaller packet would have fit
@@ -72,46 +95,67 @@ static __u64 try_increment_counter(
         // counter again this would add a lot of work for dropping packets, so
         // we leave it.
         bpf_trace_printk("counter increment: failure", 27);
-        return 1;
+        return 0;
     }
 }
+
+static __u32 classify_packet(struct xdp_md* ctx) { return 0; }
+static __u32 calculate_size(struct xdp_md* ctx) {
+    return ctx->data_end - ctx->data;
+}
+
+static __u32 initialize(struct phantom_queue* queue) {
+    // initialize timer
+    __u32 res = bpf_timer_init(
+        &queue->policer, &xdp_general_map, CLOCK_MONOTONIC
+    );
+    if (res) {
+        bpf_printk("error: could not initialize timer: %ld", 39, res);
+        return 1;
+    }
+
+    // set the callback for the timer
+    res = bpf_timer_set_callback(&queue->policer, policer_callback);
+    if (res) {
+        bpf_printk("error: timer_set_callback: %ld", 31, res);
+        return 1;
+    }
+    // start the timer
+    res = bpf_timer_start(&queue->policer, ONE_SECOND, 0);
+    if (res) {
+        bpf_printk("error: timer_start: %ld", 24, res);
+        return 1;
+    }
+    return 0;
+}
+
 
 SEC("xdp")
 int bc_pqp_xdp(struct xdp_md* ctx) {
     bpf_trace_printk("===== BC-PQP on queue %u =====", 31, ctx->rx_queue_index);
 
-    if (ctx->rx_queue_index >= RX_QUEUES) {
-        bpf_trace_printk(
-            "Unexpected rx queue index: %u >= %u", 36, ctx->rx_queue_index,
-            RX_QUEUES
-        );
-        goto pass;
-    }
-    // per queue
-    /*
-    __u32 key = ctx->rx_queue_index;
-    struct phantom_queue* queue_read = (struct phantom_queue*)
-        bpf_map_lookup_elem(&xdp_general_map, &key);
-    if (queue_read == NULL) {
-        bpf_trace_printk("Could not read queue-specific element from map", 47);
-    } else {
-        __u64 result = try_increment_counter(key, queue_read);
-        if (result == 0) {
-            goto pass;
-        } else {
-            goto drop;
-        }
-    }*/
 
-    // total
-    __u32 key = RX_QUEUES;
-    struct phantom_queue* queue_read = (struct phantom_queue*)
-        bpf_map_lookup_elem(&xdp_general_map, &key);
-    if (queue_read == NULL) {
+    __u32 key = classify_packet(ctx);
+    __u64 packet_size = calculate_size(ctx);
+    struct phantom_queue* queue = (struct phantom_queue*)bpf_map_lookup_elem(
+        &xdp_general_map, &key
+    );
+    if (queue == NULL) {
         bpf_trace_printk("Could not read total element from map", 38);
     } else {
-        __u64 result = try_increment_counter(key, queue_read);
-        if (result == 0) {
+        if (queue->capacity == 0) {
+            // we are first, start timer and initialize capacity
+            __u32 res = __sync_val_compare_and_swap(&queue->capacity, 0, RATE);
+            if (!res) {
+                res = initialize(queue);
+                if (!res) {
+                    return XDP_ABORTED;
+                }
+            }
+        }
+
+        __u64 result = try_increment_counter(queue, packet_size);
+        if (!result) {
             goto pass;
         } else {
             goto drop;
