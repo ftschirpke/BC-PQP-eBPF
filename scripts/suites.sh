@@ -47,7 +47,7 @@ while [[ $# -gt 0 ]]; do
             exit 1
             ;;
         *)
-            [ -z "$command" ] || { echo "Found option '$1' while already specified command: $command"; return 1; }
+            [ -z "$command" ] || { echo "Found option '$1' while already specified command: $command"; exit 1; }
             command="$1"
             shift
             ;;
@@ -86,6 +86,7 @@ if [[ -z "$TMUX" ]]; then
     echo "Not running inside tmux."
 fi
 
+# TODO: consider adding non-tmux solution
 if [[ -z "$TMUX" ]] || [[ "$dry_run" == true ]]; then
     echo "Would have (simultaneously) run:"
     for cmd in "${commands[@]}"; do
