@@ -19,6 +19,7 @@
 # INFO: There may be easier solutions to achieve the same goal.
 #
 #   +--------- ns1 ----------+     +--------- ns2 ----------+
+#   |        "client"        |     |        "server"        |
 #   |  +------------------+  |     |  +------------------+  |
 #   |  |     veth1_ns     |  |     |  |     veth2_ns     |  |
 #   |  |  192.168.101.10  |  |     |  |  192.168.102.10  |  |
@@ -88,8 +89,8 @@ sudo ip link set veth2_host master br2
 sudo ip link set veth1_host up
 sudo ip link set veth2_host up
 
-# sudo ip addr add 192.168.101.20/24 dev veth1_host
-# sudo ip addr add 192.168.102.20/24 dev veth2_host
+sudo ip addr add 192.168.101.20/24 dev veth1_host
+sudo ip addr add 192.168.102.20/24 dev veth2_host
 
 sudo ip addr add 192.168.101.30/24 dev br1
 sudo ip addr add 192.168.102.30/24 dev br2

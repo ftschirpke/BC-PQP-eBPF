@@ -1,4 +1,5 @@
 build/**
+**.flent.gz
 
 qemu/filesystem.tar
 qemu/filesystem.qcow2
