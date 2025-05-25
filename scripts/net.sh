@@ -474,7 +474,7 @@ test__simple__client() {
     while [[ $# -gt 0 ]]; do
         case $1 in
             -h|--help)
-                test__server__help
+                test__simple__client__help
                 return 0
                 ;;
             -r|--reverse)
@@ -516,7 +516,7 @@ test__simple__client() {
                 ;;
             *)
                 echo "Unknown option $1"
-                test__server__help
+                test__simple__client__help
                 return 1
                 ;;
         esac
@@ -652,7 +652,7 @@ test__advanced__client() {
     while [[ $# -gt 0 ]]; do
         case $1 in
             -h|--help)
-                test__server__help
+                test__advanced__client__help
                 return 0
                 ;;
             -r|--reverse)
@@ -661,7 +661,7 @@ test__advanced__client() {
                 ;;
             -*|--*)
                 echo "Unknown option $1"
-                test__server__help
+                test__advanced__client__help
                 return 1
                 ;;
             *)
