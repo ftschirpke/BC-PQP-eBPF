@@ -21,11 +21,10 @@ RUN echo "ttyS0::respawn:/sbin/agetty --autologin root ttyS0 vt100\n" >> /etc/in
 # set root password
 RUN echo "root:root" | chpasswd
 # enable networking
-RUN echo "auto lo" > /etc/network/interfaces
-RUN echo "iface lo inet loopback" >> /etc/network/interfaces
-RUN echo "auto eth0" >> /etc/network/interfaces
-# RUN echo "iface eth0 inet dhcp" >> /etc/network/interfaces
+COPY ./services/interfaces /etc/network/
+RUN echo "net.ipv4.ip_forward=1" > /etc/sysctl.conf 
 RUN rc-update add networking boot
+RUN rc-update add sysctl boot
 
 # disable welcome prompt
 RUN echo "" > /etc/motd
@@ -35,9 +34,6 @@ RUN echo "ebpf" > /etc/hostname
 # create the bpffs
 COPY --chmod=700 ./services/bpffs /etc/init.d/bpffs
 RUN rc-update add bpffs boot
-# create the host-VM bridge
-COPY --chmod=700 ./services/bridge_setup /etc/init.d/bridge_setup
-RUN rc-update add bridge_setup boot
 # mount debug fs
 RUN rc-update add sysfs boot
 # remove services that don't work in our environment and aren't needed
