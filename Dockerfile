@@ -11,7 +11,8 @@ FROM alpine:${ALPINE_REVISION}
 ARG FLAVOR
 
 # kernel, autologin, init system (used for networking), network tools
-RUN apk add linux-${FLAVOR} agetty openrc xdp-tools iproute2 iputils-ping tcpdump ethtool
+RUN apk add linux-${FLAVOR} agetty openrc xdp-tools iproute2 iputils-ping tcpdump ethtool bash
+RUN apk add hping3 --update-cache --repository http://dl-cdn.alpinelinux.org/alpine/edge/testing
 # debug stuff, in a new layer to avoid unnecessary rebuilds
 RUN apk add 
 
