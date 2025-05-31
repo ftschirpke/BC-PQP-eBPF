@@ -634,7 +634,7 @@ TEST_ADVANCED_DEFAULT_STEP_SIZE="0.1"
 test__advanced__client__help() {
 
 cat <<EOF
-Usage:  $0 test advanced [ -h ] [ -r ] flent_test_name
+Usage:  $0 test advanced [ -h ] [ -r ] [ -t time ] [ -s step_size ] flent_test_name
 
     Start up a flent client.
 
@@ -652,7 +652,6 @@ EOF
 }
 
 test__advanced__client() {
-    # TODO: add more functionality
     reverse=false
     time=""
     step_size=""
