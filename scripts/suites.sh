@@ -75,6 +75,12 @@ case $command in
             "$dir/net.sh test simple client"
         )
         ;;
+    advanced_test)
+        commands=(
+            "$dir/net.sh test advanced server"
+            "$dir/net.sh test advanced client"
+        )
+        ;;
     *)
         echo "Unknown command $1"
         help

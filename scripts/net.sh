@@ -627,7 +627,9 @@ test__advanced__server() {
     return 0
 }
 
-TEST_ADVANCED_DEFAULT_TEST="tcp_4up"
+TEST_ADVANCED_DEFAULT_TEST="rrul"
+TEST_ADVANCED_DEFAULT_TIME="10"
+TEST_ADVANCED_DEFAULT_STEP_SIZE="0.1"
 
 test__advanced__client__help() {
 
@@ -639,6 +641,10 @@ Usage:  $0 test advanced [ -h ] [ -r ] flent_test_name
     -h|--help           Show this help
     -r|--reverse        Reverse roles i.e. use server as client
                         and thus start the client in namespace $SERVER_NAMESPACE
+    -t|--time           Base test time in seconds (default: $TEST_ADVANCED_DEFAULT_TIME)
+                        (flent may adjust this a bit for certain test cases)
+    -s|--step-size      Step size for sampling (default: $TEST_ADVANCED_DEFAULT_STEP_SIZE)
+                        (this is not very accurately realized by flent)
 
     flent_test_name     A name of a flent test configuration (default: $TEST_ADVANCED_DEFAULT_TEST)
 EOF
@@ -648,6 +654,8 @@ EOF
 test__advanced__client() {
     # TODO: add more functionality
     reverse=false
+    time=""
+    step_size=""
     positional_args=()
     while [[ $# -gt 0 ]]; do
         case $1 in
@@ -657,6 +665,18 @@ test__advanced__client() {
                 ;;
             -r|--reverse)
                 reverse=true
+                shift
+                ;;
+            -t|--time)
+                [ -z "$time" ] || { echo "Found option '$1' while already specified $time as the time."; return 1; }
+                shift
+                time="-l $1"
+                shift
+                ;;
+            -s|--step-size)
+                [ -z "$step_size" ] || { echo "Found option '$1' while already specified $step_size as the step size."; return 1; }
+                shift
+                time="-s $1"
                 shift
                 ;;
             -*|--*)
@@ -679,6 +699,14 @@ test__advanced__client() {
         target="$SERVER_IP"
     fi
 
+    if [[ "$time" == "" ]]; then
+        time="-l $TEST_ADVANCED_DEFAULT_TIME"
+    fi
+
+    if [[ "$step_size" == "" ]]; then
+        step_size="-s $TEST_ADVANCED_DEFAULT_STEP_SIZE"
+    fi
+
     base_cmd="sudo ip netns exec $namespace flent -H $target"
 
     test_name="${positional_args[@]}"
@@ -686,7 +714,7 @@ test__advanced__client() {
         test_name="$TEST_ADVANCED_DEFAULT_TEST"
     fi
 
-    cmd="$base_cmd $test_name"
+    cmd="$base_cmd $time $step_size $test_name"
 
     echo "Executing: $cmd"
     echo
