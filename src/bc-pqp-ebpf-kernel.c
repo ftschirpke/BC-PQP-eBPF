@@ -19,10 +19,18 @@
 
 #define ONE_SECOND 1e9 // 1s = 1e9 ns
 #define RATE 1e6       // 1 MB/s
+// burst control
+#define UPPER_THRESHOLD (1.5 * RATE)
+#define LOWER_THRESHOLD (0.5 * RATE)
 
 struct phantom_queue {
+    // how many bytes were send (if occupancy > capacity, how many bytes were requested)
     __u64 occupancy;
+    // how many bytes we want to allow
     __u64 capacity;
+    // the last time the policer adjusted the occupancy/rate
+    __u64 refresh;
+    // the policer of this queue
     struct bpf_timer policer;
 };
 
@@ -43,6 +51,8 @@ static __u32 policer_callback(
 ) {
     // reset occupancy
     queue->occupancy = 0;
+    // set last refresh, needed for burst control
+    queue->refresh = bpf_ktime_get_ns();
 
     // reset the timer
     __u64 res = bpf_timer_start(&queue->policer, ONE_SECOND, 0);
@@ -64,14 +74,38 @@ static __u64 try_increment_counter(
     // https://docs.ebpf.io/linux/concepts/concurrency/
     // atomic add seems to be broken right now
     __u64 occupancy = queue->occupancy;
+    // always increment, we use it to estimate the current rate
+    __sync_fetch_and_add(&queue->occupancy, packet_size);
+    
+    //burst control
+    __u64 interval = bpf_ktime_get_ns() - queue->refresh;
+    
+    // the current rate in bytes/ms
+    // tradeoff: per ns our minimum rate would be 1e9, we chose per ms to allow for more gradual rates (but that also means that they are less precise)
+    // 2^10 = 1024 ~= 1000
+    //todo can we avoid division?
+    __u64 r_i = occupancy / (interval >> 10);
+    // the expected rate for the complete time window (one second)
+    __u64 X_i = r_i << 10;
+    __u64 X_i_plus = UPPER_THRESHOLD;
+    __u64 X_i_minus = LOWER_THRESHOLD;
+    if (X_i > X_i_plus) {
+        // fill queue with magic packets
+        __sync_fetch_and_add(&queue->occupancy, queue->capacity - occupancy);
+    } else if (X_i < X_i_minus) {
+        // remove magic packets
+        // todo: what happens if the queue was reset in the meantime and we can't subtract that many? I can't find documentation on this
+        __sync_fetch_and_sub(&queue->occupancy, queue->capacity - occupancy);
+    }
+
+
     bpf_trace_printk(
-        "Packet counters: queu: %u, occupancy: %lu, capacity: %lu", 57, key,
+        "Packet counters: queue: %u, occupancy: %lu, capacity: %lu", 58, key,
         occupancy, queue->capacity
     );
     if (occupancy + packet_size <= queue->capacity) {
         // we are allowed to continue, send the packages
         bpf_trace_printk("counter increment: success", 27);
-        __sync_fetch_and_add(&queue->occupancy, packet_size);
         return 0;
     } else {
         // our package did not fit, so we drop it
