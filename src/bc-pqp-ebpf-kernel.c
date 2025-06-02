@@ -74,6 +74,7 @@ static __u64 try_increment_counter(
     // https://docs.ebpf.io/linux/concepts/concurrency/
     // atomic add seems to be broken right now
     __u64 occupancy = queue->occupancy;
+    __u64 capacity = queue->capacity;
     // always increment, we use it to estimate the current rate
     __sync_fetch_and_add(&queue->occupancy, packet_size);
     
@@ -91,11 +92,16 @@ static __u64 try_increment_counter(
     __u64 X_i_minus = LOWER_THRESHOLD;
     if (X_i > X_i_plus) {
         // fill queue with magic packets
-        __sync_fetch_and_add(&queue->occupancy, queue->capacity - occupancy);
+
+        __u64 magic = capacity - occupancy;
+        __sync_fetch_and_add(&queue->occupancy, magic);
+        bpf_trace_printk("added %ld magic bytes to queue %d with occupancy %ld and capacity %ld ", 71, magic, key, occupancy, capacity);
     } else if (X_i < X_i_minus) {
         // remove magic packets
         // todo: what happens if the queue was reset in the meantime and we can't subtract that many? I can't find documentation on this
-        __sync_fetch_and_sub(&queue->occupancy, queue->capacity - occupancy);
+        __u64 magic = capacity - occupancy;
+        __sync_fetch_and_sub(&queue->occupancy, magic);
+        bpf_trace_printk("subtracted %ld magic bytes to queue %d with occupancy %ld and capacity %ld ", 76, magic, key, occupancy, capacity);
     }
 
 
