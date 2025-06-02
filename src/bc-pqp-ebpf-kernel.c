@@ -80,7 +80,34 @@ static __u64 try_increment_counter(
     }
 }
 
-static __u32 classify_packet(struct xdp_md* ctx) { return 0; }
+// just returns 8-bit DiffServ value from IP's TOS header field
+// 0x100 if any error occurs while parsing
+static __u32 classify_packet(struct xdp_md* ctx) {
+    void* data = (void*)(long)ctx->data;
+    void* data_end = (void*)(long)ctx->data_end;
+    struct hdr_cursor nh;
+    nh.pos = data;
+
+    struct ethhdr* eth_header;
+    int eth_type = parse_ethhdr(&nh, data_end, &eth_header);
+    eth_type = bpf_ntohs(eth_type);
+    bpf_trace_printk(
+        "ETH type: 0x%04x (0x%04x is IPv4, 0x%04x is IPv6)", 50, eth_type,
+        ETH_P_IP, ETH_P_IPV6
+    );
+
+    struct iphdr* ipv4_header;
+    struct ipv6hdr* ipv6_header;
+    if (eth_type != ETH_P_IP) {
+        return 0x100;
+    }
+    int ipv4_type = parse_iphdr(&nh, data_end, &ipv4_header);
+    if (ipv4_type != IPPROTO_ICMP) {
+        return 0x100;
+    }
+    return ipv4_header->tos & 0xff;
+}
+
 static __u32 calculate_size(struct xdp_md* ctx) {
     return ctx->data_end - ctx->data;
 }
