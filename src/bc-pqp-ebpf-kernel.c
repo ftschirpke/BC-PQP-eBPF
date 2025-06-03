@@ -22,14 +22,18 @@
 // burst control
 #define UPPER_THRESHOLD (1.5 * RATE)
 #define LOWER_THRESHOLD (0.5 * RATE)
+#define BURST_TIME_MS 10
 
 struct phantom_queue {
-    // how many bytes were send (if occupancy > capacity, how many bytes were requested)
+    // how many bytes were send (if occupancy > capacity, how many bytes were
+    // requested)
     __u64 occupancy;
     // how many bytes we want to allow
     __u64 capacity;
     // the last time the policer adjusted the occupancy/rate
     __u64 refresh;
+    // how much magic is currently in this queue
+    __u64 magic;
     // the policer of this queue
     struct bpf_timer policer;
 };
@@ -49,8 +53,14 @@ at the desired rate (with the desired policy).
 static __u32 policer_callback(
     void* map, __u32* key, struct phantom_queue* queue
 ) {
-    // reset occupancy
-    queue->occupancy = 0;
+    // reset occupancy, don't touch magic packets
+    if (queue->occupancy >= RATE) {
+        __sync_fetch_and_sub(&queue->occupancy, ((__u64)RATE) - queue->magic);
+    } else {
+        queue->occupancy = 0 + queue->magic;
+    }
+
+
     // set last refresh, needed for burst control
     queue->refresh = bpf_ktime_get_ns();
 
@@ -67,6 +77,61 @@ static __u32 policer_callback(
     return 0;
 }
 
+static void burst_control(__u32 key, struct phantom_queue* queue) {
+    // todo it is not obvious to me that all magic packets will be removed again
+    __u64 occupancy = queue->occupancy;
+    __u64 capacity = queue->capacity;
+    __u64 interval_ms = (bpf_ktime_get_ns() - queue->refresh) >> 10;
+
+    // the rate for this queue (per bytes/ms)
+    // todo: queue->capacity vs r_i?
+    __u64 r_i = queue->capacity / interval_ms;
+    // capacity (bytes) for this queue in the BURST_TIME_MS window
+    __u64 x_i = r_i * BURST_TIME_MS;
+    // calculate thresholds
+    __u64 x_i_half = x_i >> 1;
+    __u64 x_i_plus = x_i, x_i_minus = x_i;
+    x_i_plus += x_i_half;
+    x_i_minus -= x_i_half;
+    if (occupancy > x_i_plus) {
+        // fill queue with magic packets
+        if (queue->magic == 0) {
+            // we can only have one magic in the queue?
+            __u64 magic = capacity - occupancy;
+            __u64 res = __sync_val_compare_and_swap(&queue->magic, 0, magic);
+            if (res == 0) {
+                // race won, add magic
+                __sync_fetch_and_add(&queue->occupancy, magic);
+                bpf_trace_printk(
+                    "added %ld magic bytes to queue %d with occupancy %ld", 53,
+                    magic, key, occupancy
+                );
+            }
+        }
+
+    } else if (occupancy < x_i_minus) {
+        // remove magic packets
+        // todo: what happens if the queue was reset in the meantime and we
+        // can't subtract that many
+
+        __u64 magic = queue->magic;
+
+        if (magic != 0) {
+            // only drain magic packets if there are any
+            __u64 res = __sync_val_compare_and_swap(&queue->magic, magic, 0);
+            if (res == magic) {
+                // race won, we get to decrement the occupancy
+                __sync_fetch_and_sub(&queue->occupancy, magic);
+                bpf_trace_printk(
+                    "subtracted %ld magic bytes from queue %d with occupancy "
+                    "%ld",
+                    60, magic, key, occupancy
+                );
+            }
+        }
+    }
+}
+
 static __u64 try_increment_counter(
     __u32 key, struct phantom_queue* queue, __u64 packet_size
 ) {
@@ -77,39 +142,15 @@ static __u64 try_increment_counter(
     __u64 capacity = queue->capacity;
     // always increment, we use it to estimate the current rate
     __sync_fetch_and_add(&queue->occupancy, packet_size);
-    
-    //burst control
-    __u64 interval = bpf_ktime_get_ns() - queue->refresh;
-    
-    // the current rate in bytes/ms
-    // tradeoff: per ns our minimum rate would be 1e9, we chose per ms to allow for more gradual rates (but that also means that they are less precise)
-    // 2^10 = 1024 ~= 1000
-    //todo can we avoid division?
-    __u64 r_i = occupancy / (interval >> 10);
-    // the expected rate for the complete time window (one second)
-    __u64 X_i = r_i << 10;
-    __u64 X_i_plus = UPPER_THRESHOLD;
-    __u64 X_i_minus = LOWER_THRESHOLD;
-    if (X_i > X_i_plus) {
-        // fill queue with magic packets
 
-        __u64 magic = capacity - occupancy;
-        __sync_fetch_and_add(&queue->occupancy, magic);
-        bpf_trace_printk("added %ld magic bytes to queue %d with occupancy %ld and capacity %ld ", 71, magic, key, occupancy, capacity);
-    } else if (X_i < X_i_minus) {
-        // remove magic packets
-        // todo: what happens if the queue was reset in the meantime and we can't subtract that many? I can't find documentation on this
-        __u64 magic = capacity - occupancy;
-        __sync_fetch_and_sub(&queue->occupancy, magic);
-        bpf_trace_printk("subtracted %ld magic bytes to queue %d with occupancy %ld and capacity %ld ", 76, magic, key, occupancy, capacity);
-    }
+    burst_control(key, queue);
 
 
     bpf_trace_printk(
         "Packet counters: queue: %u, occupancy: %lu, capacity: %lu", 58, key,
-        occupancy, queue->capacity
+        occupancy, capacity
     );
-    if (occupancy + packet_size <= queue->capacity) {
+    if (occupancy + packet_size <= capacity) {
         // we are allowed to continue, send the packages
         bpf_trace_printk("counter increment: success", 27);
         return 0;
