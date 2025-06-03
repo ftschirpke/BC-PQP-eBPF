@@ -14,8 +14,10 @@
 #define CLOCK_MONOTONIC 1
 #define CLOCK_BOOTTIME 7
 
+#define PARSING_ERROR -1
 
 #define RX_QUEUES 4
+#define PHANTOM_QUEUES 10
 
 #define ONE_SECOND 1e9 // 1s = 1e9 ns
 #define RATE 1e6       // 1 MB/s
@@ -30,9 +32,45 @@ struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
     __type(value, struct phantom_queue);
-    __uint(max_entries, RX_QUEUES + 1);
+    __uint(max_entries, PHANTOM_QUEUES);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } xdp_general_map SEC(".maps");
+
+enum packet_classification {
+    IPv4_UDP_0x00_TOS,
+    IPv4_UDP_0x20_TOS,
+    IPv4_UDP_0xb8_TOS,
+    IPv4_TCP_0x00_TOS,
+    IPv4_TCP_0x20_TOS,
+    IPv4_TCP_0xa0_TOS,
+    IPv4_TCP_0xb8_TOS,
+    IPv4_ICMP,
+    IPv6,
+
+    // default value if packet cannot be classified
+    // MUST(!) stay last value in enum
+    UNCLASSIFIED,
+};
+_Static_assert(
+    UNCLASSIFIED <= PHANTOM_QUEUES, "Number of different classifications must "
+                                    "be less or equal to phantom queue count"
+);
+
+
+__u64 classification_counts[UNCLASSIFIED + 1] = {0};
+
+const char* const classification_names[UNCLASSIFIED + 1] = {
+    [IPv4_UDP_0x00_TOS] = "IPv4 UDP with TOS of 0x00",
+    [IPv4_UDP_0x20_TOS] = "IPv4 UDP with TOS of 0x20",
+    [IPv4_UDP_0xb8_TOS] = "IPv4 UDP with TOS of 0xb8",
+    [IPv4_TCP_0x00_TOS] = "IPv4 TCP with TOS of 0x00",
+    [IPv4_TCP_0x20_TOS] = "IPv4 TCP with TOS of 0x20",
+    [IPv4_TCP_0xa0_TOS] = "IPv4 TCP with TOS of 0xa0",
+    [IPv4_TCP_0xb8_TOS] = "IPv4 TCP with TOS of 0xb8",
+    [IPv4_ICMP] = "IPv4 ICMP",
+    [IPv6] = "IPv6",
+    [UNCLASSIFIED] = "Unclassified",
+};
 
 /*
 The policer (one per phantom queue) is responsible for draining the queue
@@ -43,6 +81,13 @@ static __u32 policer_callback(
 ) {
     // reset occupancy
     queue->occupancy = 0;
+
+    bpf_trace_printk("Packet classification counts:", 30);
+    for (__u32 i = 0; i <= UNCLASSIFIED; i++) {
+        bpf_trace_printk(
+            "%07ld (%s)", 21, classification_counts[i], classification_names[i]
+        );
+    }
 
     // reset the timer
     __u64 res = bpf_timer_start(&queue->policer, ONE_SECOND, 0);
@@ -80,9 +125,8 @@ static __u64 try_increment_counter(
     }
 }
 
-// just returns 8-bit DiffServ value from IP's TOS header field
-// 0x100 if any error occurs while parsing
-static __u32 classify_packet(struct xdp_md* ctx) {
+// classify packet using 8-bit DiffServ value from IP's TOS header field
+static enum packet_classification classify_packet(struct xdp_md* ctx) {
     void* data = (void*)(long)ctx->data;
     void* data_end = (void*)(long)ctx->data_end;
     struct hdr_cursor nh;
@@ -91,21 +135,55 @@ static __u32 classify_packet(struct xdp_md* ctx) {
     struct ethhdr* eth_header;
     int eth_type = parse_ethhdr(&nh, data_end, &eth_header);
     eth_type = bpf_ntohs(eth_type);
-    bpf_trace_printk(
-        "ETH type: 0x%04x (0x%04x is IPv4, 0x%04x is IPv6)", 50, eth_type,
-        ETH_P_IP, ETH_P_IPV6
-    );
+
+    if (eth_type != ETH_P_IP) {
+        if (eth_type == ETH_P_IPV6) {
+            return IPv6;
+        }
+        return UNCLASSIFIED;
+    }
 
     struct iphdr* ipv4_header;
-    struct ipv6hdr* ipv6_header;
-    if (eth_type != ETH_P_IP) {
-        return 0x100;
-    }
     int ipv4_type = parse_iphdr(&nh, data_end, &ipv4_header);
-    if (ipv4_type != IPPROTO_ICMP) {
-        return 0x100;
+
+    switch (ipv4_type) {
+        case IPPROTO_UDP: {
+            switch (ipv4_header->tos) {
+                case 0x00:
+                    return IPv4_UDP_0x00_TOS;
+                case 0x20:
+                    return IPv4_UDP_0x20_TOS;
+                case 0xb8:
+                    return IPv4_UDP_0xb8_TOS;
+                default:
+                    bpf_trace_printk(
+                        "UNEXPECTED UDP tos: %x", 23, ipv4_header->tos
+                    );
+                    return UNCLASSIFIED;
+            }
+        }
+        case IPPROTO_TCP:
+            switch (ipv4_header->tos) {
+                case 0x00:
+                    return IPv4_TCP_0x00_TOS;
+                case 0x20:
+                    return IPv4_TCP_0x20_TOS;
+                case 0xa0:
+                    return IPv4_TCP_0xa0_TOS;
+                case 0xb8:
+                    return IPv4_TCP_0xb8_TOS;
+                default:
+                    bpf_trace_printk(
+                        "UNEXPECTED TCP tos: %x", 23, ipv4_header->tos
+                    );
+                    return UNCLASSIFIED;
+            }
+        case IPPROTO_ICMP:
+            return IPv4_ICMP;
+        case PARSING_ERROR:
+        default:
+            return UNCLASSIFIED;
     }
-    return ipv4_header->tos & 0xff;
 }
 
 static __u32 calculate_size(struct xdp_md* ctx) {
@@ -144,8 +222,13 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
         "===== BC-PQP on rx-queue %u =====", 34, ctx->rx_queue_index
     );
 
+    enum packet_classification classification = classify_packet(ctx);
+    __u32 key = UNCLASSIFIED;
+    if (classification <= UNCLASSIFIED) {
+        key = classification;
+        __sync_fetch_and_add(&classification_counts[key], 1);
+    }
 
-    __u32 key = classify_packet(ctx);
     __u64 packet_size = calculate_size(ctx);
     struct phantom_queue* queue = (struct phantom_queue*)bpf_map_lookup_elem(
         &xdp_general_map, &key
