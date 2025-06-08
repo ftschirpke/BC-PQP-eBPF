@@ -7,35 +7,23 @@
 #include <bpf/bpf_helpers.h>
 #include <xdp/parsing_helpers.h>
 
-// flags allowed in bpf_timer_init, see also
-// - https://github.com/tpapagian/go-ebpf-timer/blob/main/fentry.c
-// - https://docs.ebpf.io/linux/concepts/timers/
-#define CLOCK_REALTIME 0
-#define CLOCK_MONOTONIC 1
-#define CLOCK_BOOTTIME 7
-
 #define PARSING_ERROR -1
 
 #define RX_QUEUES 4
 #define PHANTOM_QUEUES 10
 
-#define ONE_SECOND 1e9 // 1s = 1e9 ns
-#define RATE 1e6       // 1 MB/s
-
-
-#define ENABLE_LOGGING 0
-
-#if !ENABLE_LOGGING
-#define bpf_trace_printk(...)                                                  \
-    do {                                                                       \
-    } while (0)
-#endif
-
+#define ONE_SECOND 1000000000L // 1s = 1e9 ns
+#define RATE 1e6               // 1 MB/s
 
 struct phantom_queue {
-    __u64 occupancy;
+    // how many bytes are currently in this queue
+    __s64 occupancy;
+    // how many bytes fit in this queue
     __u64 capacity;
-    struct bpf_timer policer;
+    // timestamp of the packet that was sent last
+    __u64 last_packet;
+    // how many bytes are drained per second
+    __u64 rate;
 };
 
 struct {
@@ -82,57 +70,42 @@ const char* const classification_names[UNCLASSIFIED + 1] = {
     [UNCLASSIFIED] = "Unclassified",
 };
 
-/*
-The policer (one per phantom queue) is responsible for draining the queue
-at the desired rate (with the desired policy).
-*/
-static __u32 policer_callback(
-    void* map, __u32* key, struct phantom_queue* queue
-) {
-    // reset occupancy
-    queue->occupancy = 0;
-
-    bpf_trace_printk("Packet classification counts:", 30);
-    for (__u32 i = 0; i <= UNCLASSIFIED; i++) {
-        bpf_trace_printk(
-            "%07ld (%s)", 21, classification_counts[i], classification_names[i]
-        );
-    }
-
-    // reset the timer
-    __u64 res = bpf_timer_start(&queue->policer, ONE_SECOND, 0);
-    if (res) {
-        bpf_trace_printk(
-            "error: could not reset policer in callback %ld", 47, res
-        );
-        return 0;
-    }
-    bpf_trace_printk("reset occupancy for queue %u", 29, *key);
-
-    return 0;
+static __s64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
+    // todo is this always positive?
+    __s64 timespan = now - previous;
+    return (timespan * rate) / ONE_SECOND;
 }
 
 static __u64 try_increment_counter(
     __u32 key, struct phantom_queue* queue, __u64 packet_size
 ) {
-    // see https://github.com/llvm/llvm-project/issues/35921 vs
-    // https://docs.ebpf.io/linux/concepts/concurrency/
-    // atomic add seems to be broken right now
-    __u64 occupancy = queue->occupancy;
-    bpf_trace_printk(
-        "Packet counters: queu: %u, occupancy: %lu, capacity: %lu", 57, key,
-        occupancy, queue->capacity
+    __u64 now = bpf_ktime_get_ns();
+    __u64 last_packet = queue->last_packet;
+    __u64 rate = queue->rate;
+    __s64 drain = calculate_drain(now, last_packet, rate);
+    __u64 prev = __sync_val_compare_and_swap(
+        &queue->last_packet, last_packet, now
     );
-    if (occupancy + packet_size <= queue->capacity) {
-        // we are allowed to continue, send the packages
-        bpf_trace_printk("counter increment: success", 27);
-        __sync_fetch_and_add(&queue->occupancy, packet_size);
-        return 0;
+    __s64 diff;
+    if (prev == last_packet) {
+        // we won the race, so we will add the drain and our packet to the
+        // occupancy
+        diff = packet_size - drain;
     } else {
-        // our package did not fit, so we drop it
-        bpf_trace_printk("counter increment: failure", 27);
-        return 1;
+        // we lost the race, meaning someone whose timestamp is very close to
+        // ours wrote their results at the same time because of this, the drain
+        // between our two timestamps should be negligible
+        diff = packet_size;
     }
+    // now we are can write to the occupancy, but we still need to check whether
+    // it fits into our capacity
+    if (queue->occupancy + diff <= queue->capacity) {
+        __sync_fetch_and_add(&queue->occupancy, diff);
+        bpf_trace_printk("counter increment: success", 27);
+        return 0;
+    }
+    bpf_trace_printk("counter increment: failure", 27);
+    return 1;
 }
 
 // classify packet using 8-bit DiffServ value from IP's TOS header field
@@ -201,27 +174,8 @@ static __u32 calculate_size(struct xdp_md* ctx) {
 }
 
 static __u32 initialize(struct phantom_queue* queue) {
-    // initialize timer
-    __u32 res = bpf_timer_init(
-        &queue->policer, &xdp_general_map, CLOCK_MONOTONIC
-    );
-    if (res) {
-        bpf_trace_printk("error: could not initialize timer: %ld", 39, res);
-        return 1;
-    }
-
-    // set the callback for the timer
-    res = bpf_timer_set_callback(&queue->policer, policer_callback);
-    if (res) {
-        bpf_trace_printk("error: could not set timer callback: %ld", 41, res);
-        return 1;
-    }
-    // start the timer
-    res = bpf_timer_start(&queue->policer, ONE_SECOND, 0);
-    if (res) {
-        bpf_trace_printk("error: could not start timer: %ld", 34, res);
-        return 1;
-    }
+    // capacity was already set
+    queue->rate = RATE;
     return 0;
 }
 
