@@ -12,13 +12,14 @@
 #define RX_QUEUES 4
 
 #define ONE_SECOND 1000000000L // 1s = 1e9 ns
-#define RATE 1e6               // 1 MB/s
+#define BURST_TIME 100000000L
+#define RATE 1e6 // 1 MB/s
 
 #define DEBUG
 #ifdef DEBUG
-    #define log(...) bpf_trace_printk(__VA_ARGS__)
+#define log(...) bpf_trace_printk(__VA_ARGS__)
 #else
-    #define log(...)
+#define log(...)
 #endif
 
 struct phantom_queue {
@@ -30,6 +31,8 @@ struct phantom_queue {
     __u64 time;
     // how many bytes are drained per second
     __u64 rate;
+    // how much of the occupancy is actually magic
+    __u64 magic;
 };
 
 struct {
@@ -52,18 +55,68 @@ static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
     return res / ONE_SECOND;
 }
 
+static void burst_control(__u32 key, struct phantom_queue* queue) {
+    __u64 occupancy = queue->occupancy;
+    __u64 capacity = queue->capacity;
+    __u64 r_i = queue->capacity; // todo if we have multiple queues we have to
+                                 // estimate this somehow. Maybe with a policer
+                                 // that updates a map?
+    __u64 x_i = r_i * BURST_TIME / ONE_SECOND;
+    // calculate thresholds (0.5, 1.5)
+    __u64 x_i_half = x_i >> 1;
+    __u64 x_i_plus = x_i, x_i_minus = x_i;
+    x_i_plus += x_i_half;
+    x_i_minus -= x_i_half;
+
+    if (occupancy > x_i_plus) {
+        // fill queue with magic packets
+        if (queue->magic == 0) {
+            __u64 magic = capacity - occupancy;
+            __u64 res = __sync_val_compare_and_swap(&queue->magic, 0, magic);
+            if (res == 0) {
+                // race won, add magic
+                __sync_fetch_and_add(&queue->occupancy, magic);
+                log(
+                    "added %ld magic bytes to queue %d with occupancy %ld", 53,
+                    magic, key, occupancy
+                );
+            }
+        }
+
+    } else if (occupancy < x_i_minus) {
+        // remove magic packets
+        __u64 magic = queue->magic;
+
+        if (magic != 0) {
+            // only drain magic packets if there are any
+            __u64 res = __sync_val_compare_and_swap(&queue->magic, magic, 0);
+            if (res == magic) {
+                // race won, we get to decrement the occupancy
+                __sync_fetch_and_sub(&queue->occupancy, magic);
+                log(
+                    "subtracted %ld magic bytes from queue %d with occupancy "
+                    "%ld",
+                    60, magic, key, occupancy
+                );
+            }
+        }
+    }
+}
+
 static __u64 try_increment_counter(
     __u32 key, struct phantom_queue* queue, __u64 packet_size
 ) {
+    burst_control(key, queue);
+    
     __u64 now = bpf_ktime_get_ns();
     __u64 previous = queue->time;
     __u64 rate = queue->rate;
     __s64 occupancy = queue->occupancy;
     __u64 drain = calculate_drain(now, previous, rate);
-    
+
     __s64 diff = 0;
     __u64 prev = __sync_val_compare_and_swap(&queue->time, previous, now);
-    
+
     if (prev == previous) {
         // the winner adds the drain
         // if we lose someone else will
@@ -72,7 +125,7 @@ static __u64 try_increment_counter(
 
     __u64 rv;
 
-    // check upper bound 
+    // check upper bound
     if (occupancy + diff + ((__s64)packet_size) <= (__s64)queue->capacity) {
         diff += packet_size;
         rv = 0;
@@ -108,9 +161,7 @@ static __u32 initialize(struct phantom_queue* queue) {
 
 SEC("xdp")
 int bc_pqp_xdp(struct xdp_md* ctx) {
-    log(
-        "===== BC-PQP on rx-queue %u =====", 34, ctx->rx_queue_index
-    );
+    log("===== BC-PQP on rx-queue %u =====", 34, ctx->rx_queue_index);
 
 
     __u32 key = classify_packet(ctx);
