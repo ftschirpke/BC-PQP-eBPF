@@ -32,9 +32,11 @@ struct {
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } xdp_general_map SEC(".maps");
 
-static __s64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
-    // todo is this always positive?
+static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
     __s64 timespan = now - previous;
+    if (timespan < (__s64)0) {
+        return 0;
+    }
     return (timespan * rate) / ONE_SECOND;
 }
 
@@ -44,7 +46,7 @@ static __u64 try_increment_counter(
     __u64 now = bpf_ktime_get_ns();
     __u64 last_packet = queue->last_packet;
     __u64 rate = queue->rate;
-    __s64 drain = calculate_drain(now, last_packet, rate);
+    __u64 drain = calculate_drain(now, last_packet, rate);
     __u64 prev = __sync_val_compare_and_swap(
         &queue->last_packet, last_packet, now
     );
