@@ -97,14 +97,31 @@ static __u64 try_increment_counter(
         // between our two timestamps should be negligible
         diff = packet_size;
     }
-    // now we are can write to the occupancy, but we still need to check whether
-    // it fits into our capacity
-    if (queue->occupancy + diff <= queue->capacity) {
-        __sync_fetch_and_add(&queue->occupancy, diff);
+    __s64 occupancy = queue->occupancy;
+    bpf_trace_printk("occ: %li, pkt: %lu", 19, occupancy, packet_size);
+    bpf_trace_printk("drain: %li, diff: %li", 22, drain, diff);
+
+
+    if (diff > (__s64)0) {
+        // now we are can write to the occupancy, but we still need to check
+        // whether it fits into our capacity
+        if (occupancy + diff <= (__s64)queue->capacity) {
+            __sync_fetch_and_add(&queue->occupancy, diff);
+            bpf_trace_printk("counter increment: success", 27);
+            return 0;
+        }
+        bpf_trace_printk("counter increment: failure", 27);
+    } else {
+        // we drain from the occupancy until it is empty
+        if (occupancy + diff < (__s64)0) {
+            __sync_fetch_and_sub(&queue->occupancy, occupancy);
+        } else {
+            __sync_fetch_and_add(&queue->occupancy, diff);
+        }
         bpf_trace_printk("counter increment: success", 27);
         return 0;
     }
-    bpf_trace_printk("counter increment: failure", 27);
+
     return 1;
 }
 
@@ -176,6 +193,7 @@ static __u32 calculate_size(struct xdp_md* ctx) {
 static __u32 initialize(struct phantom_queue* queue) {
     // capacity was already set
     queue->rate = RATE;
+    queue->last_packet = bpf_ktime_get_ns();
     return 0;
 }
 
