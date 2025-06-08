@@ -17,6 +17,15 @@
 #define ONE_SECOND 1000000000L // 1s = 1e9 ns
 #define RATE 1e6               // 1 MB/s
 
+#define DEBUG
+#ifdef DEBUG
+#define log(...) bpf_trace_printk(__VA_ARGS__)
+#else
+#define log(...)                                                               \
+    do {                                                                       \
+    } while (0)
+#endif
+
 struct phantom_queue {
     // how many bytes are currently in this queue
     __s64 occupancy;
@@ -108,10 +117,10 @@ static __u64 try_increment_counter(
     if (occupancy + diff + ((__s64)packet_size) <= (__s64)queue->capacity) {
         diff += packet_size;
         rv = 0;
-        bpf_trace_printk("counter increment: success", 27);
+        log("counter increment: success", 27);
     } else {
         rv = 1;
-        bpf_trace_printk("counter increment: failure", 27);
+        log("counter increment: failure", 27);
     }
     // check lower bound
     if (occupancy + diff > 0) {
@@ -119,8 +128,8 @@ static __u64 try_increment_counter(
     } else if (occupancy > 0) {
         __sync_fetch_and_sub(&queue->occupancy, occupancy);
     }
-    bpf_trace_printk("occ: %li, pkt: %lu", 19, occupancy, packet_size);
-    bpf_trace_printk("drain: %li, diff: %li", 22, drain, diff);
+    log("occ: %li, pkt: %lu", 19, occupancy, packet_size);
+    log("drain: %li, diff: %li", 22, drain, diff);
 
     return rv;
 }
@@ -200,9 +209,7 @@ static __u32 initialize(struct phantom_queue* queue) {
 
 SEC("xdp")
 int bc_pqp_xdp(struct xdp_md* ctx) {
-    bpf_trace_printk(
-        "===== BC-PQP on rx-queue %u =====", 34, ctx->rx_queue_index
-    );
+    log("===== BC-PQP on rx-queue %u =====", 34, ctx->rx_queue_index);
 
     enum packet_classification classification = classify_packet(ctx);
     __u32 key = UNCLASSIFIED;
@@ -216,7 +223,7 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
         &xdp_general_map, &key
     );
     if (queue == NULL) {
-        bpf_trace_printk("Could not read element %u from map", 35, key);
+        log("Could not read element %u from map", 35, key);
         goto abort;
     } else {
         if (queue->capacity == 0) {
@@ -226,7 +233,7 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
                 // race won, we can initialize our queue
                 res = initialize(queue);
                 if (res) {
-                    bpf_trace_printk("failed to initialize queue %u", 30, key);
+                    log("failed to initialize queue %u", 30, key);
                     goto abort;
                 }
             }
@@ -240,13 +247,13 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
         }
     }
 abort:
-    bpf_trace_printk("We are aborting", 16);
+    log("We are aborting", 16);
     return XDP_ABORTED;
 drop:
-    bpf_trace_printk("We are dropping the packet.", 28);
+    log("We are dropping the packet.", 28);
     return XDP_DROP;
 pass:
-    bpf_trace_printk("We are passing the packet to the kernel.", 41);
+    log("We are passing the packet to the kernel.", 41);
     return XDP_PASS;
 }
 
