@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include <limits.h>
+
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/types.h>
@@ -14,8 +16,6 @@
 
 #define ONE_SECOND 1000000000L // 1s = 1e9 ns
 #define RATE 1e6               // 1 MB/s
-#define MAX_TIMESPAN                                                           \
-    ((1 << 64) / RATE) // limit timespan to prevent integer overflow
 
 struct phantom_queue {
     // how many bytes are currently in this queue
@@ -23,7 +23,7 @@ struct phantom_queue {
     // how many bytes fit in this queue
     __u64 capacity;
     // timestamp of the packet that was sent last
-    __u64 last_packet;
+    __u64 time;
     // how many bytes are drained per second
     __u64 rate;
 };
@@ -77,53 +77,51 @@ static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
     if (timespan < (__s64)0) {
         return 0;
     }
-    if (timespan >= (__s64)MAX_TIMESPAN) {
-        // TODO: find a (better) way to detect integer overflow
-        return (1 << 64) - 1;
+    __s64 res = timespan * rate;
+    if (res < 0) {
+        res = INT_MAX;
     }
-    return (timespan * rate) / ONE_SECOND;
+    return res / ONE_SECOND;
 }
 
 static __u64 try_increment_counter(
     __u32 key, struct phantom_queue* queue, __u64 packet_size
 ) {
     __u64 now = bpf_ktime_get_ns();
-    __u64 last_packet = queue->last_packet;
+    __u64 previous = queue->time;
     __u64 rate = queue->rate;
-    __u64 drain = calculate_drain(now, last_packet, rate);
-    __u64 prev = __sync_val_compare_and_swap(
-        &queue->last_packet, last_packet, now
-    );
-    __s64 diff;
-    if (prev == last_packet) {
-        // we won the race, so we will add the drain and our packet to the
-        // occupancy
-        diff = packet_size - drain;
-    } else {
-        // we lost the race, meaning someone whose timestamp is very close to
-        // ours wrote their results at the same time because of this, the drain
-        // between our two timestamps should be negligible
-        diff = packet_size;
-    }
     __s64 occupancy = queue->occupancy;
+    __u64 drain = calculate_drain(now, previous, rate);
+
+    __s64 diff = 0;
+    __u64 prev = __sync_val_compare_and_swap(&queue->time, previous, now);
+
+    if (prev == previous) {
+        // the winner adds the drain
+        // if we lose someone else will
+        diff = -drain;
+    }
+
+    __u64 rv;
+
+    // check upper bound
+    if (occupancy + diff + ((__s64)packet_size) <= (__s64)queue->capacity) {
+        diff += packet_size;
+        rv = 0;
+        bpf_trace_printk("counter increment: success", 27);
+    } else {
+        rv = 1;
+        bpf_trace_printk("counter increment: failure", 27);
+    }
+    // check lower bound
+    if (occupancy + diff > 0) {
+        __sync_fetch_and_add(&queue->occupancy, diff);
+    } else if (occupancy > 0) {
+        __sync_fetch_and_sub(&queue->occupancy, occupancy);
+    }
     bpf_trace_printk("occ: %li, pkt: %lu", 19, occupancy, packet_size);
     bpf_trace_printk("drain: %li, diff: %li", 22, drain, diff);
 
-    __u64 rv = 0;
-
-    if (occupancy + diff <= (__s64)queue->capacity) {
-        bpf_trace_printk("counter increment: success", 27);
-    } else {
-        diff = -drain;
-        bpf_trace_printk("counter increment: failure", 27);
-        rv = 1;
-    }
-    // we drain from the occupancy until it is empty
-    if (occupancy + diff < (__s64)0) {
-        __sync_fetch_and_sub(&queue->occupancy, occupancy);
-    } else {
-        __sync_fetch_and_add(&queue->occupancy, diff);
-    }
     return rv;
 }
 
@@ -195,7 +193,7 @@ static __u32 calculate_size(struct xdp_md* ctx) {
 static __u32 initialize(struct phantom_queue* queue) {
     // capacity was already set
     queue->rate = RATE;
-    queue->last_packet = bpf_ktime_get_ns();
+    queue->time = bpf_ktime_get_ns();
     return 0;
 }
 
