@@ -20,6 +20,16 @@
 #define ONE_SECOND 1e9 // 1s = 1e9 ns
 #define RATE 1e6       // 1 MB/s
 
+
+#define ENABLE_LOGGING 0
+
+#if !ENABLE_LOGGING
+#define bpf_trace_printk(...)                                                  \
+    do {                                                                       \
+    } while (0)
+#endif
+
+
 struct phantom_queue {
     __u64 occupancy;
     __u64 capacity;
