@@ -20,13 +20,15 @@ Usage:  $0 [ -h ]
         debug_network_full      Send pings through the network and dumps even more packets
                                 than debug_network
         simple_test             Runs a simple iperf3 network test
+        advanced_test           Runs the default flent network test
+        all_tests               Runs a selected sequence of flent network tests
 EOF
 
 }
 
 commands=()
 
-dir=$(dirname "$0")
+dir=$(realpath $(dirname "$0"))
 
 dry_run=false
 command=""
@@ -81,6 +83,30 @@ case $command in
             "$dir/net.sh test advanced client"
         )
         ;;
+    all_tests)
+        commands=(
+            "$dir/net.sh test advanced server"
+"$(cat<<EOF
+mkdir -p tests-$(git rev-parse HEAD) && cd tests-$(git rev-parse HEAD) &&
+$dir/net.sh test advanced client rrul &&
+sleep 2 &&
+$dir/net.sh test advanced client rrul_up &&
+sleep 2 &&
+$dir/net.sh test advanced client rrul_icmp &&
+sleep 2 &&
+$dir/net.sh test advanced client tcp_1up &&
+sleep 2 &&
+$dir/net.sh test advanced client tcp_4up &&
+sleep 2 &&
+$dir/net.sh test advanced client tcp_12up &&
+sleep 2 &&
+$dir/net.sh test advanced client udp_flood &&
+echo Put a simple description of the state of the project here >> README &&
+"${EDITOR:-vi}" README
+EOF
+)"
+        )
+        ;;
     *)
         echo "Unknown command $1"
         help
@@ -96,7 +122,7 @@ fi
 if [[ -z "$TMUX" ]] || [[ "$dry_run" == true ]]; then
     echo "Would have (simultaneously) run:"
     for cmd in "${commands[@]}"; do
-        echo "  $cmd"
+        echo "> $cmd"
     done
     exit 0
 fi
