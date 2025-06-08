@@ -12,6 +12,8 @@
 
 #define ONE_SECOND 1000000000L // 1s = 1e9 ns
 #define RATE 1e6               // 1 MB/s
+#define MAX_TIMESPAN                                                           \
+    ((1 << 64) / RATE) // limit timespan to prevent integer overflow
 
 struct phantom_queue {
     // how many bytes are currently in this queue
@@ -36,6 +38,10 @@ static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
     __s64 timespan = now - previous;
     if (timespan < (__s64)0) {
         return 0;
+    }
+    if (timespan >= (__s64)MAX_TIMESPAN) {
+        // TODO: find a (better) way to detect integer overflow
+        return (1 << 64) - 1;
     }
     return (timespan * rate) / ONE_SECOND;
 }
@@ -65,28 +71,22 @@ static __u64 try_increment_counter(
     bpf_trace_printk("occ: %li, pkt: %lu", 19, occupancy, packet_size);
     bpf_trace_printk("drain: %li, diff: %li", 22, drain, diff);
 
+    __u64 rv = 0;
 
-    if (diff > (__s64)0) {
-        // now we are can write to the occupancy, but we still need to check
-        // whether it fits into our capacity
-        if (occupancy + diff <= (__s64)queue->capacity) {
-            __sync_fetch_and_add(&queue->occupancy, diff);
-            bpf_trace_printk("counter increment: success", 27);
-            return 0;
-        }
-        bpf_trace_printk("counter increment: failure", 27);
-    } else {
-        // we drain from the occupancy until it is empty
-        if (occupancy + diff < (__s64)0) {
-            __sync_fetch_and_sub(&queue->occupancy, occupancy);
-        } else {
-            __sync_fetch_and_add(&queue->occupancy, diff);
-        }
+    if (occupancy + diff <= (__s64)queue->capacity) {
         bpf_trace_printk("counter increment: success", 27);
-        return 0;
+    } else {
+        diff = -drain;
+        bpf_trace_printk("counter increment: failure", 27);
+        rv = 1;
     }
-
-    return 1;
+    // we drain from the occupancy until it is empty
+    if (occupancy + diff < (__s64)0) {
+        __sync_fetch_and_sub(&queue->occupancy, occupancy);
+    } else {
+        __sync_fetch_and_add(&queue->occupancy, diff);
+    }
+    return rv;
 }
 
 static __u32 classify_packet(struct xdp_md* ctx) { return 0; }
