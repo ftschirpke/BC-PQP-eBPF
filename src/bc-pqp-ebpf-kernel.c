@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include <limits.h>
+
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
 #include <linux/types.h>
@@ -7,35 +9,31 @@
 #include <bpf/bpf_helpers.h>
 #include <xdp/parsing_helpers.h>
 
-// flags allowed in bpf_timer_init, see also
-// - https://github.com/tpapagian/go-ebpf-timer/blob/main/fentry.c
-// - https://docs.ebpf.io/linux/concepts/timers/
-#define CLOCK_REALTIME 0
-#define CLOCK_MONOTONIC 1
-#define CLOCK_BOOTTIME 7
-
 #define PARSING_ERROR -1
 
 #define RX_QUEUES 4
 #define PHANTOM_QUEUES 10
 
-#define ONE_SECOND 1e9 // 1s = 1e9 ns
-#define RATE 1e6       // 1 MB/s
+#define ONE_SECOND 1000000000L // 1s = 1e9 ns
+#define RATE 1e6               // 1 MB/s
 
-
-#define ENABLE_LOGGING 0
-
-#if !ENABLE_LOGGING
-#define bpf_trace_printk(...)                                                  \
+#ifdef DEBUG
+#define log(...) bpf_trace_printk(__VA_ARGS__)
+#else
+#define log(...)                                                               \
     do {                                                                       \
     } while (0)
 #endif
 
-
 struct phantom_queue {
-    __u64 occupancy;
+    // how many bytes are currently in this queue
+    __s64 occupancy;
+    // how many bytes fit in this queue
     __u64 capacity;
-    struct bpf_timer policer;
+    // timestamp of the packet that was sent last
+    __u64 time;
+    // how many bytes are drained per second
+    __u64 rate;
 };
 
 struct {
@@ -82,57 +80,57 @@ const char* const classification_names[UNCLASSIFIED + 1] = {
     [UNCLASSIFIED] = "Unclassified",
 };
 
-/*
-The policer (one per phantom queue) is responsible for draining the queue
-at the desired rate (with the desired policy).
-*/
-static __u32 policer_callback(
-    void* map, __u32* key, struct phantom_queue* queue
-) {
-    // reset occupancy
-    queue->occupancy = 0;
-
-    bpf_trace_printk("Packet classification counts:", 30);
-    for (__u32 i = 0; i <= UNCLASSIFIED; i++) {
-        bpf_trace_printk(
-            "%07ld (%s)", 21, classification_counts[i], classification_names[i]
-        );
-    }
-
-    // reset the timer
-    __u64 res = bpf_timer_start(&queue->policer, ONE_SECOND, 0);
-    if (res) {
-        bpf_trace_printk(
-            "error: could not reset policer in callback %ld", 47, res
-        );
+static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
+    __s64 timespan = now - previous;
+    if (timespan < (__s64)0) {
         return 0;
     }
-    bpf_trace_printk("reset occupancy for queue %u", 29, *key);
-
-    return 0;
+    __s64 res = timespan * rate;
+    if (res < 0) {
+        res = INT_MAX;
+    }
+    return res / ONE_SECOND;
 }
 
 static __u64 try_increment_counter(
     __u32 key, struct phantom_queue* queue, __u64 packet_size
 ) {
-    // see https://github.com/llvm/llvm-project/issues/35921 vs
-    // https://docs.ebpf.io/linux/concepts/concurrency/
-    // atomic add seems to be broken right now
-    __u64 occupancy = queue->occupancy;
-    bpf_trace_printk(
-        "Packet counters: queu: %u, occupancy: %lu, capacity: %lu", 57, key,
-        occupancy, queue->capacity
-    );
-    if (occupancy + packet_size <= queue->capacity) {
-        // we are allowed to continue, send the packages
-        bpf_trace_printk("counter increment: success", 27);
-        __sync_fetch_and_add(&queue->occupancy, packet_size);
-        return 0;
-    } else {
-        // our package did not fit, so we drop it
-        bpf_trace_printk("counter increment: failure", 27);
-        return 1;
+    __u64 now = bpf_ktime_get_ns();
+    __u64 previous = queue->time;
+    __u64 rate = queue->rate;
+    __s64 occupancy = queue->occupancy;
+    __u64 drain = calculate_drain(now, previous, rate);
+
+    __s64 diff = 0;
+    __u64 prev = __sync_val_compare_and_swap(&queue->time, previous, now);
+
+    if (prev == previous) {
+        // the winner adds the drain
+        // if we lose someone else will
+        diff = -drain;
     }
+
+    __u64 rv;
+
+    // check upper bound
+    if (occupancy + diff + ((__s64)packet_size) <= (__s64)queue->capacity) {
+        diff += packet_size;
+        rv = 0;
+        log("counter increment: success", 27);
+    } else {
+        rv = 1;
+        log("counter increment: failure", 27);
+    }
+    // check lower bound
+    if (occupancy + diff > 0) {
+        __sync_fetch_and_add(&queue->occupancy, diff);
+    } else if (occupancy > 0) {
+        __sync_fetch_and_sub(&queue->occupancy, occupancy);
+    }
+    log("occ: %li, pkt: %lu", 19, occupancy, packet_size);
+    log("drain: %li, diff: %li", 22, drain, diff);
+
+    return rv;
 }
 
 // classify packet using 8-bit DiffServ value from IP's TOS header field
@@ -201,36 +199,16 @@ static __u32 calculate_size(struct xdp_md* ctx) {
 }
 
 static __u32 initialize(struct phantom_queue* queue) {
-    // initialize timer
-    __u32 res = bpf_timer_init(
-        &queue->policer, &xdp_general_map, CLOCK_MONOTONIC
-    );
-    if (res) {
-        bpf_trace_printk("error: could not initialize timer: %ld", 39, res);
-        return 1;
-    }
-
-    // set the callback for the timer
-    res = bpf_timer_set_callback(&queue->policer, policer_callback);
-    if (res) {
-        bpf_trace_printk("error: could not set timer callback: %ld", 41, res);
-        return 1;
-    }
-    // start the timer
-    res = bpf_timer_start(&queue->policer, ONE_SECOND, 0);
-    if (res) {
-        bpf_trace_printk("error: could not start timer: %ld", 34, res);
-        return 1;
-    }
+    // capacity was already set
+    queue->rate = RATE;
+    queue->time = bpf_ktime_get_ns();
     return 0;
 }
 
 
 SEC("xdp")
 int bc_pqp_xdp(struct xdp_md* ctx) {
-    bpf_trace_printk(
-        "===== BC-PQP on rx-queue %u =====", 34, ctx->rx_queue_index
-    );
+    log("===== BC-PQP on rx-queue %u =====", 34, ctx->rx_queue_index);
 
     enum packet_classification classification = classify_packet(ctx);
     __u32 key = UNCLASSIFIED;
@@ -244,7 +222,7 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
         &xdp_general_map, &key
     );
     if (queue == NULL) {
-        bpf_trace_printk("Could not read element %u from map", 35, key);
+        log("Could not read element %u from map", 35, key);
         goto abort;
     } else {
         if (queue->capacity == 0) {
@@ -254,7 +232,7 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
                 // race won, we can initialize our queue
                 res = initialize(queue);
                 if (res) {
-                    bpf_trace_printk("failed to initialize queue %u", 30, key);
+                    log("failed to initialize queue %u", 30, key);
                     goto abort;
                 }
             }
@@ -268,13 +246,13 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
         }
     }
 abort:
-    bpf_trace_printk("We are aborting", 16);
+    log("We are aborting", 16);
     return XDP_ABORTED;
 drop:
-    bpf_trace_printk("We are dropping the packet.", 28);
+    log("We are dropping the packet.", 28);
     return XDP_DROP;
 pass:
-    bpf_trace_printk("We are passing the packet to the kernel.", 41);
+    log("We are passing the packet to the kernel.", 41);
     return XDP_PASS;
 }
 

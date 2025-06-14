@@ -32,6 +32,15 @@ $(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	    -emit-llvm -g \
 		-o $(@:.o=.ll) $<
 	$(LLC) -march=bpf -filetype=obj -o $@ $(@:.o=.ll)
+	$(CLANG) -S \
+	    -target bpf \
+	    -D __BPF_TRACING__ \
+		-D DEBUG \
+		$(C_FLAGS) \
+	    $(WARN_FLAGS) \
+	    -emit-llvm -g \
+		-o debug_$(@:.o=.ll) $<
+	$(LLC) -march=bpf -filetype=obj -o debug_$@ debug_$(@:.o=.ll)
 
 # === BUILDING THE VIRTUAL MACHINE ===
 
