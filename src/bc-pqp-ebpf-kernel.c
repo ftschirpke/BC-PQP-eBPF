@@ -17,7 +17,6 @@
 #define ONE_SECOND 1000000000L // 1s = 1e9 ns
 #define RATE 1e6               // 1 MB/s
 
-#define DEBUG
 #ifdef DEBUG
 #define log(...) bpf_trace_printk(__VA_ARGS__)
 #else
