@@ -4,6 +4,7 @@ RUN apk add linux-headers clang llvm elfutils-dev libbpf-dev libxdp-dev xdp-tool
 COPY ./src /root/src
 COPY ./Makefile /root/Makefile
 WORKDIR /root
+RUN mkdir -p debug_build
 RUN make build
 
 # inspired by https://github.com/k8spacket/k8spacket/blob/master/tests/e2e/vm/filesystem/Dockerfile
