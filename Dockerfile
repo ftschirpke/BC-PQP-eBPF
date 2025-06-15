@@ -1,4 +1,4 @@
-ARG ALPINE_REVISION=3.21@sha256:a8560b36e8b8210634f77d9f7f9efd7ffa463e380b75e2e74aff4511df3ef88c
+ARG ALPINE_REVISION=3.22@sha256:8a1f59ffb675680d47db6337b49d22281a139e9d709335b492be023728e11715
 FROM alpine:${ALPINE_REVISION} AS build
 RUN apk add linux-headers clang llvm elfutils-dev libbpf-dev libxdp-dev xdp-tools make
 COPY ./src /root/src
@@ -32,10 +32,7 @@ RUN echo "" > /etc/motd
 
 # set hostname
 RUN echo "ebpf" > /etc/hostname
-# create the bpffs
-COPY --chmod=700 ./services/bpffs /etc/init.d/bpffs
-RUN rc-update add bpffs boot
-# mount debug fs
+# mount debugfs and bpffs
 RUN rc-update add sysfs boot
 # remove services that don't work in our environment and aren't needed
 RUN rm -f /etc/init.d/machine-id /etc/init.d/hwdrivers
