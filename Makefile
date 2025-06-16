@@ -17,10 +17,14 @@ WARN_FLAGS = -Wall -Wno-unused-value -Wno-pointer-sign -Wno-compare-distinct-poi
 
 EBPF_HDR = 
 
+DEBUG_PREFIX = debug_
+
 EBPF_C = $(filter %.c, $(EBPF_SRC))
 EBPF_OBJ = $(addprefix $(BUILD_DIR)/,$(EBPF_C:%.c=%.o))
+EBPF_DEBUG_OBJ = $(addprefix $(BUILD_DIR)/$(DEBUG_PREFIX),$(EBPF_C:%.c=%.o))
+EBPF_OBJECTS = $(EBPF_OBJ) $(EBPF_DEBUG_OBJ)
 
-build: $(EBPF_OBJ) 
+build: $(EBPF_OBJECTS)
 
 $(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(BUILD_DIR)
@@ -32,6 +36,8 @@ $(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	    -emit-llvm -g \
 		-o $(@:.o=.ll) $<
 	$(LLC) -march=bpf -filetype=obj -o $@ $(@:.o=.ll)
+
+$(EBPF_DEBUG_OBJ): $(BUILD_DIR)/$(DEBUG_PREFIX)%.o: $(SRC_DIR)/%.c
 	$(CLANG) -S \
 	    -target bpf \
 	    -D __BPF_TRACING__ \
@@ -39,8 +45,8 @@ $(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 		$(C_FLAGS) \
 	    $(WARN_FLAGS) \
 	    -emit-llvm -g \
-		-o debug_$(@:.o=.ll) $<
-	$(LLC) -march=bpf -filetype=obj -o debug_$@ debug_$(@:.o=.ll)
+		-o $(@:.o=.ll) $<
+	$(LLC) -march=bpf -filetype=obj -o $@ $(@:.o=.ll)
 
 # === BUILDING THE VIRTUAL MACHINE ===
 
@@ -48,7 +54,7 @@ SU_DOCKER=$(shell id -nGz "${USER}" | grep -qzxF "docker" || echo sudo)
 SU_LVIRTD=$(shell id -nGz "${USER}" | grep -qzxF "libvirtd" || echo sudo)
 FLAVOR=virt
 
-qemu/filesystem.qcow2: Dockerfile $(EBF_OBJ) 
+qemu/filesystem.qcow2: Dockerfile $(EBF_OBJECTS) 
 	# build filesystem image and store as tar archive
 	DOCKER_BUILDKIT=1 ${SU_DOCKER} docker build --build-arg FLAVOR=${FLAVOR} --output "type=tar,dest=qemu/filesystem.tar" .
 	# extract kernel
