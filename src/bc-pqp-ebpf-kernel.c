@@ -14,9 +14,12 @@
 #define RX_QUEUES 4
 #define PHANTOM_QUEUES 10
 
+#define MEBIBYTE (1 << 20)
+#define GIBIBYTE (1 << 30)
+
 #define ONE_SECOND 1000000000L // 1s = 1e9 ns
 #define BURST_TIME 100000000L
-#define RATE 1e6 // 1 MB/s
+#define RATE MEBIBYTE // 1 MB/s
 
 #ifdef DEBUG
 #define log(...) bpf_trace_printk(__VA_ARGS__)
@@ -243,8 +246,32 @@ static enum packet_classification classify_packet(struct xdp_md* ctx) {
     }
 }
 
-static __u32 calculate_size(struct xdp_md* ctx) {
-    return ctx->data_end - ctx->data;
+static __u32 calculate_size(
+    struct xdp_md* ctx, enum packet_classification classification
+) {
+    __u32 full_size = ctx->data_end - ctx->data;
+    __u32 ipv4_size = 20;
+    switch (classification) {
+        case IPv6:
+            // todo distinguish UDP/TCP/ICMP
+            return full_size - 40;
+        case IPv4_ICMP:
+            return full_size - ipv4_size - 8;
+        case IPv4_UDP_0x00_TOS:
+        case IPv4_UDP_0x20_TOS:
+        case IPv4_UDP_0xb8_TOS:
+            // we don't consider packets with an options field
+            return full_size - ipv4_size - 8;
+        case IPv4_TCP_0x00_TOS:
+        case IPv4_TCP_0x20_TOS:
+        case IPv4_TCP_0xa0_TOS:
+        case IPv4_TCP_0xb8_TOS:
+            // we don't consider packets with an options field
+            return full_size - ipv4_size - 20;
+        case UNCLASSIFIED:
+        default:
+            return full_size;
+    }
 }
 
 static __u32 initialize(struct phantom_queue* queue) {
@@ -266,7 +293,7 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
         __sync_fetch_and_add(&classification_counts[key], 1);
     }
 
-    __u64 packet_size = calculate_size(ctx);
+    __u64 packet_size = calculate_size(ctx, classification);
     struct phantom_queue* queue = (struct phantom_queue*)bpf_map_lookup_elem(
         &xdp_general_map, &key
     );
