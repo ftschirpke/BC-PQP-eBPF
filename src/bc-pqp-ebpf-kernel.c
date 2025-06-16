@@ -15,7 +15,8 @@
 #define PHANTOM_QUEUES 10
 
 #define ONE_SECOND 1000000000L // 1s = 1e9 ns
-#define RATE 1e6               // 1 MB/s
+#define BURST_TIME 100000000L
+#define RATE 1e6 // 1 MB/s
 
 #ifdef DEBUG
 #define log(...) bpf_trace_printk(__VA_ARGS__)
@@ -34,6 +35,8 @@ struct phantom_queue {
     __u64 time;
     // how many bytes are drained per second
     __u64 rate;
+    // how much of the occupancy is actually magic
+    __u64 magic;
 };
 
 struct {
@@ -86,15 +89,61 @@ static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
         return 0;
     }
     __s64 res = timespan * rate;
-    if (res < 0) {
+    if (res < (__s64)0) {
         res = INT_MAX;
     }
     return res / ONE_SECOND;
 }
 
+static void burst_control(__u32 key, struct phantom_queue* queue) {
+    __u64 occupancy = queue->occupancy;
+    __u64 capacity = queue->capacity;
+    // unlike in the paper we assume that all queues are active
+    // and that the queue size is proportional to the demand
+    __u64 r_i = queue->capacity;
+    __u64 x_i = r_i * BURST_TIME / ONE_SECOND;
+    // calculate thresholds (0.5, 1.5)
+    __u64 x_i_half = x_i >> 1;
+    __u64 x_i_plus = x_i, x_i_minus = x_i;
+    x_i_plus += x_i_half;
+    x_i_minus -= x_i_half;
+
+    if (occupancy > x_i_plus) {
+        // fill queue with magic packets
+        if (queue->magic == 0) {
+            __u64 magic = capacity - occupancy;
+            __u64 res = __sync_val_compare_and_swap(&queue->magic, 0, magic);
+            if (res == 0) {
+                // race won, add magic
+                __sync_fetch_and_add(&queue->occupancy, magic);
+                log("added %ld magic bytes to queue %d with occupancy %ld", 53,
+                    magic, key, occupancy);
+            }
+        }
+
+    } else if (occupancy < x_i_minus) {
+        // remove magic packets
+        __u64 magic = queue->magic;
+
+        if (magic != 0) {
+            // only drain magic packets if there are any
+            __u64 res = __sync_val_compare_and_swap(&queue->magic, magic, 0);
+            if (res == magic) {
+                // race won, we get to decrement the occupancy
+                __sync_fetch_and_sub(&queue->occupancy, magic);
+                log("subtracted %ld magic bytes from queue %d with occupancy "
+                    "%ld",
+                    60, magic, key, occupancy);
+            }
+        }
+    }
+}
+
 static __u64 try_increment_counter(
     __u32 key, struct phantom_queue* queue, __u64 packet_size
 ) {
+    burst_control(key, queue);
+
     __u64 now = bpf_ktime_get_ns();
     __u64 previous = queue->time;
     __u64 rate = queue->rate;
