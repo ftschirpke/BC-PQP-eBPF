@@ -21,6 +21,8 @@
 #define BURST_TIME 100000000L
 #define RATE MEBIBYTE // 1 MB/s
 
+#define STRIP_HEADERS
+
 #ifdef DEBUG
 #define log(...) bpf_trace_printk(__VA_ARGS__)
 #else
@@ -250,6 +252,9 @@ static __u32 calculate_size(
     struct xdp_md* ctx, enum packet_classification classification
 ) {
     __u32 full_size = ctx->data_end - ctx->data;
+#ifndef STRIP_HEADERS
+    return full_size;
+#else
     __u32 ipv4_size = 20;
     switch (classification) {
         case IPv6:
@@ -272,6 +277,7 @@ static __u32 calculate_size(
         default:
             return full_size;
     }
+#endif
 }
 
 static __u32 initialize(struct phantom_queue* queue) {
