@@ -14,12 +14,21 @@
 #define RX_QUEUES 4
 #define PHANTOM_QUEUES 10
 
+#define MEBIBYTE (1 << 20)
+#define GIBIBYTE (1 << 30)
+
 #define ONE_SECOND 1000000000L // 1s = 1e9 ns
 #define BURST_TIME 100000000L
-#define RATE 1e6 // 1 MB/s
+#define RATE MEBIBYTE // 1 MB/s
+
+#define STRIP_HEADERS
 
 #ifdef DEBUG
-#define log(...) bpf_trace_printk(__VA_ARGS__)
+#define log(fmt, ...)                                                          \
+    (do {                                                                      \
+        char ____fmt[] = fmt;                                                  \
+        bpf_trace_printk(____fmt, sizeof(____fmt), ##__VA_ARGS__);             \
+    } while (0))
 #else
 #define log(...)                                                               \
     do {                                                                       \
@@ -116,7 +125,7 @@ static void burst_control(__u32 key, struct phantom_queue* queue) {
             if (res == 0) {
                 // race won, add magic
                 __sync_fetch_and_add(&queue->occupancy, magic);
-                log("added %ld magic bytes to queue %d with occupancy %ld", 53,
+                log("added %ld magic bytes to queue %d with occupancy %ld",
                     magic, key, occupancy);
             }
         }
@@ -133,7 +142,7 @@ static void burst_control(__u32 key, struct phantom_queue* queue) {
                 __sync_fetch_and_sub(&queue->occupancy, magic);
                 log("subtracted %ld magic bytes from queue %d with occupancy "
                     "%ld",
-                    60, magic, key, occupancy);
+                    magic, key, occupancy);
             }
         }
     }
@@ -165,10 +174,10 @@ static __u64 try_increment_counter(
     if (occupancy + diff + ((__s64)packet_size) <= (__s64)queue->capacity) {
         diff += packet_size;
         rv = 0;
-        log("counter increment: success", 27);
+        log("counter increment: success");
     } else {
         rv = 1;
-        log("counter increment: failure", 27);
+        log("counter increment: failure");
     }
     // check lower bound
     if (occupancy + diff > 0) {
@@ -176,8 +185,8 @@ static __u64 try_increment_counter(
     } else if (occupancy > 0) {
         __sync_fetch_and_sub(&queue->occupancy, occupancy);
     }
-    log("occ: %li, pkt: %lu", 19, occupancy, packet_size);
-    log("drain: %li, diff: %li", 22, drain, diff);
+    log("occ: %li, pkt: %lu", occupancy, packet_size);
+    log("drain: %li, diff: %li", drain, diff);
 
     return rv;
 }
@@ -243,8 +252,36 @@ static enum packet_classification classify_packet(struct xdp_md* ctx) {
     }
 }
 
-static __u32 calculate_size(struct xdp_md* ctx) {
-    return ctx->data_end - ctx->data;
+static __u32 calculate_size(
+    struct xdp_md* ctx, enum packet_classification classification
+) {
+    __u32 full_size = ctx->data_end - ctx->data;
+#ifndef STRIP_HEADERS
+    return full_size;
+#else
+    __u32 ipv4_size = 20;
+    switch (classification) {
+        case IPv6:
+            // todo distinguish UDP/TCP/ICMP
+            return full_size - 40;
+        case IPv4_ICMP:
+            return full_size - ipv4_size - 8;
+        case IPv4_UDP_0x00_TOS:
+        case IPv4_UDP_0x20_TOS:
+        case IPv4_UDP_0xb8_TOS:
+            // we don't consider packets with an options field
+            return full_size - ipv4_size - 8;
+        case IPv4_TCP_0x00_TOS:
+        case IPv4_TCP_0x20_TOS:
+        case IPv4_TCP_0xa0_TOS:
+        case IPv4_TCP_0xb8_TOS:
+            // we don't consider packets with an options field
+            return full_size - ipv4_size - 20;
+        case UNCLASSIFIED:
+        default:
+            return full_size;
+    }
+#endif
 }
 
 static __u32 initialize(struct phantom_queue* queue) {
@@ -257,7 +294,7 @@ static __u32 initialize(struct phantom_queue* queue) {
 
 SEC("xdp")
 int bc_pqp_xdp(struct xdp_md* ctx) {
-    log("===== BC-PQP on rx-queue %u =====", 34, ctx->rx_queue_index);
+    log("===== BC-PQP on rx-queue %u =====", ctx->rx_queue_index);
 
     enum packet_classification classification = classify_packet(ctx);
     __u32 key = UNCLASSIFIED;
@@ -266,12 +303,12 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
         __sync_fetch_and_add(&classification_counts[key], 1);
     }
 
-    __u64 packet_size = calculate_size(ctx);
+    __u64 packet_size = calculate_size(ctx, classification);
     struct phantom_queue* queue = (struct phantom_queue*)bpf_map_lookup_elem(
         &xdp_general_map, &key
     );
     if (queue == NULL) {
-        log("Could not read element %u from map", 35, key);
+        log("Could not read element %u from map", key);
         goto abort;
     } else {
         if (queue->capacity == 0) {
@@ -281,7 +318,7 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
                 // race won, we can initialize our queue
                 res = initialize(queue);
                 if (res) {
-                    log("failed to initialize queue %u", 30, key);
+                    log("failed to initialize queue %u", key);
                     goto abort;
                 }
             }
@@ -295,13 +332,13 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
         }
     }
 abort:
-    log("We are aborting", 16);
+    log("We are aborting");
     return XDP_ABORTED;
 drop:
-    log("We are dropping the packet.", 28);
+    log("We are dropping the packet.");
     return XDP_DROP;
 pass:
-    log("We are passing the packet to the kernel.", 41);
+    log("We are passing the packet to the kernel.");
     return XDP_PASS;
 }
 

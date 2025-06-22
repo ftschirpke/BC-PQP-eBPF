@@ -50,13 +50,14 @@ $(EBPF_DEBUG_OBJ): $(BUILD_DIR)/$(DEBUG_PREFIX)%.o: $(SRC_DIR)/%.c
 
 # === BUILDING THE VIRTUAL MACHINE ===
 
-SU_DOCKER=$(shell id -nGz "${USER}" | grep -qzxF "docker" || echo sudo)
+SU_DOCKER=$(shell id -nGz "${USER}" | grep -qzxF "docker" || type podman > /dev/null || echo sudo)
 SU_LVIRTD=$(shell id -nGz "${USER}" | grep -qzxF "libvirtd" || echo sudo)
+CNTNR_CMD=$(shell type podman > /dev/null && echo podman || echo docker)
 FLAVOR=virt
 
 qemu/filesystem.qcow2: Dockerfile $(EBF_OBJECTS) 
 	# build filesystem image and store as tar archive
-	DOCKER_BUILDKIT=1 ${SU_DOCKER} docker build --build-arg FLAVOR=${FLAVOR} --output "type=tar,dest=qemu/filesystem.tar" .
+	DOCKER_BUILDKIT=1 ${SU_DOCKER} ${CNTNR_CMD} build --build-arg FLAVOR=${FLAVOR} --output "type=tar,dest=qemu/filesystem.tar" .
 	# extract kernel
 	tar --extract --file=qemu/filesystem.tar --wildcards "boot/*"
 	# convert tar to qcow2 image
