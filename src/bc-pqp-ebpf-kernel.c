@@ -25,10 +25,10 @@
 
 #ifdef DEBUG
 #define log(fmt, ...)                                                          \
-    ({                                                                         \
+    (do {                                                                      \
         char ____fmt[] = fmt;                                                  \
         bpf_trace_printk(____fmt, sizeof(____fmt), ##__VA_ARGS__);             \
-    })
+    } while (0))
 #else
 #define log(...)                                                               \
     do {                                                                       \
