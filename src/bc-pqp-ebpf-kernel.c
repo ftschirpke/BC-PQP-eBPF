@@ -3,7 +3,11 @@
 
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
+#include <linux/in.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
 #include <linux/types.h>
+#include <linux/udp.h>
 
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
@@ -134,45 +138,9 @@ struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
     __type(value, struct phantom_queue);
-    __uint(max_entries, PHANTOM_QUEUES);
+    __uint(max_entries, PHANTOM_QUEUES + 1);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } xdp_general_map SEC(".maps");
-
-enum packet_classification {
-    IPv4_UDP_0x00_TOS,
-    IPv4_UDP_0x20_TOS,
-    IPv4_UDP_0xb8_TOS,
-    IPv4_TCP_0x00_TOS,
-    IPv4_TCP_0x20_TOS,
-    IPv4_TCP_0xa0_TOS,
-    IPv4_TCP_0xb8_TOS,
-    IPv4_ICMP,
-    IPv6,
-
-    // default value if packet cannot be classified
-    // MUST(!) stay last value in enum
-    UNCLASSIFIED,
-};
-_Static_assert(
-    UNCLASSIFIED <= PHANTOM_QUEUES, "Number of different classifications must "
-                                    "be less or equal to phantom queue count"
-);
-
-
-__u64 classification_counts[UNCLASSIFIED + 1] = {0};
-
-const char* const classification_names[UNCLASSIFIED + 1] = {
-    [IPv4_UDP_0x00_TOS] = "IPv4 UDP with TOS of 0x00",
-    [IPv4_UDP_0x20_TOS] = "IPv4 UDP with TOS of 0x20",
-    [IPv4_UDP_0xb8_TOS] = "IPv4 UDP with TOS of 0xb8",
-    [IPv4_TCP_0x00_TOS] = "IPv4 TCP with TOS of 0x00",
-    [IPv4_TCP_0x20_TOS] = "IPv4 TCP with TOS of 0x20",
-    [IPv4_TCP_0xa0_TOS] = "IPv4 TCP with TOS of 0xa0",
-    [IPv4_TCP_0xb8_TOS] = "IPv4 TCP with TOS of 0xb8",
-    [IPv4_ICMP] = "IPv4 ICMP",
-    [IPv6] = "IPv6",
-    [UNCLASSIFIED] = "Unclassified",
-};
 
 static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
     // can be negative if we have a timing issue and someone who has started
@@ -279,98 +247,79 @@ static __u64 try_increment_counter(
     return rv;
 }
 
-// classify packet using 8-bit DiffServ value from IP's TOS header field
-static enum packet_classification classify_packet(struct xdp_md* ctx) {
+
+/**
+ * classify packet using destination port
+ **/
+static void classify_packet(
+    struct xdp_md* ctx, __u32* phantom_queue, __u32* packet_size
+) {
     void* data = (void*)(long)ctx->data;
     void* data_end = (void*)(long)ctx->data_end;
+    __u32 header_size = 0;
     struct hdr_cursor nh;
     nh.pos = data;
 
-    struct ethhdr* eth_header;
-    int eth_type = parse_ethhdr(&nh, data_end, &eth_header);
+    struct ethhdr* eth;
+    int eth_type = parse_ethhdr(&nh, data_end, &eth);
     eth_type = bpf_ntohs(eth_type);
 
-    if (eth_type != ETH_P_IP) {
-        if (eth_type == ETH_P_IPV6) {
-            return IPv6;
-        }
-        return UNCLASSIFIED;
-    }
+    if ((void*)(eth + 1) > data_end)
+        goto default_error;
+    void* ip_start = (void*)eth + 1;
+    __u32 port;
+    switch (eth_type) {
+        case ETH_P_IP: {
+            header_size += 20;
+            struct iphdr* ip = (struct iphdr*)ip_start;
+            if ((void*)(ip + 1) > data_end)
+                goto default_error;
+            int ip_hdr_len = ip->ihl * 4;
 
-    struct iphdr* ipv4_header;
-    int ipv4_type = parse_iphdr(&nh, data_end, &ipv4_header);
-
-    switch (ipv4_type) {
-        case IPPROTO_UDP: {
-            switch (ipv4_header->tos) {
-                case 0x00:
-                    return IPv4_UDP_0x00_TOS;
-                case 0x20:
-                    return IPv4_UDP_0x20_TOS;
-                case 0xb8:
-                    return IPv4_UDP_0xb8_TOS;
-                default:
-                    bpf_trace_printk(
-                        "UNEXPECTED UDP tos: %x", 23, ipv4_header->tos
-                    );
-                    return UNCLASSIFIED;
+            if (ip_hdr_len < sizeof(struct iphdr)) {
+                goto default_error;
             }
+            if ((void*)ip + ip_hdr_len > data_end) {
+                goto default_error;
+            }
+            if (ip->frag_off != 0)
+                goto default_error;
+            void* transport_start = (void*)((unsigned char*)ip + ip_hdr_len);
+            char protocol = ip->protocol;
+            switch (protocol) {
+                case IPPROTO_TCP: {
+                    header_size += 20;
+                    struct tcphdr* tcp = (struct tcphdr*)transport_start;
+                    if ((void*)(tcp + 1) > data_end)
+                        goto default_error;
+                    port = tcp->source;
+                    break;
+                }
+                case IPPROTO_UDP: {
+                    header_size += 8;
+                    struct udphdr* udp = (struct udphdr*)transport_start;
+                    if ((void*)(udp + 1) > data_end)
+                        goto default_error;
+                    port = udp->source;
+                    break;
+                }
+                default:
+                    goto default_error;
+            }
+            break;
         }
-        case IPPROTO_TCP:
-            switch (ipv4_header->tos) {
-                case 0x00:
-                    return IPv4_TCP_0x00_TOS;
-                case 0x20:
-                    return IPv4_TCP_0x20_TOS;
-                case 0xa0:
-                    return IPv4_TCP_0xa0_TOS;
-                case 0xb8:
-                    return IPv4_TCP_0xb8_TOS;
-                default:
-                    bpf_trace_printk(
-                        "UNEXPECTED TCP tos: %x", 23, ipv4_header->tos
-                    );
-                    return UNCLASSIFIED;
-            }
-        case IPPROTO_ICMP:
-            return IPv4_ICMP;
-        case PARSING_ERROR:
         default:
-            return UNCLASSIFIED;
+            goto default_error;
     }
+    *phantom_queue = port;
+    *packet_size = data_end - data - header_size;
+    return;
+default_error:
+    *phantom_queue = PHANTOM_QUEUES;
+    *packet_size = data_end - data;
+    return;
 }
 
-static __u32 calculate_size(
-    struct xdp_md* ctx, enum packet_classification classification
-) {
-    __u32 full_size = ctx->data_end - ctx->data;
-#ifndef STRIP_HEADERS
-    return full_size;
-#else
-    __u32 ipv4_size = 20;
-    switch (classification) {
-        case IPv6:
-            // todo distinguish UDP/TCP/ICMP
-            return full_size - 40;
-        case IPv4_ICMP:
-            return full_size - ipv4_size - 8;
-        case IPv4_UDP_0x00_TOS:
-        case IPv4_UDP_0x20_TOS:
-        case IPv4_UDP_0xb8_TOS:
-            // we don't consider packets with an options field
-            return full_size - ipv4_size - 8;
-        case IPv4_TCP_0x00_TOS:
-        case IPv4_TCP_0x20_TOS:
-        case IPv4_TCP_0xa0_TOS:
-        case IPv4_TCP_0xb8_TOS:
-            // we don't consider packets with an options field
-            return full_size - ipv4_size - 20;
-        case UNCLASSIFIED:
-        default:
-            return full_size;
-    }
-#endif
-}
 
 static __u32 initialize(struct phantom_queue* queue) {
     // capacity was already set
@@ -384,19 +333,14 @@ SEC("xdp")
 int bc_pqp_xdp(struct xdp_md* ctx) {
     log("===== BC-PQP on rx-queue %u =====", ctx->rx_queue_index);
 
-    enum packet_classification classification = classify_packet(ctx);
-    __u32 key = UNCLASSIFIED;
-    if (classification <= UNCLASSIFIED) {
-        key = classification;
-        __sync_fetch_and_add(&classification_counts[key], 1);
-    }
+    __u32 classification, packet_size;
+    classify_packet(ctx, &classification, &packet_size);
 
-    __u64 packet_size = calculate_size(ctx, classification);
     struct phantom_queue* queue = (struct phantom_queue*)bpf_map_lookup_elem(
-        &xdp_general_map, &key
+        &xdp_general_map, &classification
     );
     if (queue == NULL) {
-        log("Could not read element %u from map", key);
+        log("Could not read element %u from map", classification);
         goto abort;
     } else {
         if (queue->capacity == 0) {
@@ -406,13 +350,15 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
                 // race won, we can initialize our queue
                 res = initialize(queue);
                 if (res) {
-                    log("failed to initialize queue %u", key);
+                    log("failed to initialize queue %u", classification);
                     goto abort;
                 }
             }
         }
 
-        __u64 result = try_increment_counter(key, queue, packet_size);
+        __u64 result = try_increment_counter(
+            classification, queue, packet_size
+        );
         if (!result) {
             goto pass;
         } else {
