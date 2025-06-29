@@ -13,7 +13,7 @@ LLC = llc
 CLANG = clang
 
 C_FLAGS = -O2
-WARN_FLAGS = -Wall -Wno-unused-value -Wno-pointer-sign -Wno-compare-distinct-pointer-types -Werror
+WARN_FLAGS = -Wall -Wno-unused-value -Wno-pointer-sign -Wno-compare-distinct-pointer-types -Wsign-compare -Wsign-conversion -Werror
 
 EBPF_HDR = 
 
