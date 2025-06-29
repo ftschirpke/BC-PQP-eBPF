@@ -142,6 +142,8 @@ struct {
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } xdp_general_map SEC(".maps");
 
+__u64 classification_counts[PHANTOM_QUEUES + 1] = {0};
+
 static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
     // can be negative if we have a timing issue and someone who has started
     // after us already managed to write to the queue. In that case our drain
@@ -292,7 +294,7 @@ static void classify_packet(
                     struct tcphdr* tcp = (struct tcphdr*)transport_start;
                     if ((void*)(tcp + 1) > data_end)
                         goto default_error;
-                    port = tcp->source;
+                    port = bpf_ntohs(tcp->source);
                     break;
                 }
                 case IPPROTO_UDP: {
@@ -300,7 +302,7 @@ static void classify_packet(
                     struct udphdr* udp = (struct udphdr*)transport_start;
                     if ((void*)(udp + 1) > data_end)
                         goto default_error;
-                    port = udp->source;
+                    port = bpf_ntohs(udp->source);
                     break;
                 }
                 default:
@@ -335,6 +337,9 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
 
     __u32 classification, packet_size;
     classify_packet(ctx, &classification, &packet_size);
+
+    __sync_fetch_and_add(&classification_counts[classification], 1);
+
 
     struct phantom_queue* queue = (struct phantom_queue*)bpf_map_lookup_elem(
         &xdp_general_map, &classification
