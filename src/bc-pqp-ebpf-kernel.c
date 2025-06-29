@@ -338,7 +338,9 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
     __u32 classification, packet_size;
     classify_packet(ctx, &classification, &packet_size);
 
-    __sync_fetch_and_add(&classification_counts[classification], 1);
+    // sanity check for the loader
+    if (classification >= 0 && classification <= PHANTOM_QUEUES)
+        __sync_fetch_and_add(&classification_counts[classification], 1);
 
 
     struct phantom_queue* queue = (struct phantom_queue*)bpf_map_lookup_elem(
