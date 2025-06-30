@@ -278,9 +278,6 @@ static void classify_packet(
                 goto default_error;
             int ip_hdr_len = ip->ihl * 4;
 
-            if (ip_hdr_len < sizeof(struct iphdr)) {
-                goto default_error;
-            }
             if ((void*)ip + ip_hdr_len > data_end) {
                 goto default_error;
             }
