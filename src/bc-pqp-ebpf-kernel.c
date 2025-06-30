@@ -93,23 +93,27 @@ const char* const classification_names[UNCLASSIFIED + 1] = {
 };
 
 static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
-    __s64 timespan = now - previous;
+    // can be negative if we have a timing issue and someone who has started
+    // after us already managed to write to the queue. In that case our drain
+    // was already included in their drain, i.e. we don't have to do anything
+    __s64 timespan = (__s64)(now - previous);
     if (timespan < (__s64)0) {
         return 0;
     }
-    __s64 res = timespan * rate;
+    __s64 res = timespan * (__s64)rate;
     if (res < (__s64)0) {
         res = INT_MAX;
     }
-    return res / ONE_SECOND;
+    // res is now unsigned again since 0 <= res <= MAX_INT
+    return (__u64)res / ONE_SECOND;
 }
 
 static void burst_control(__u32 key, struct phantom_queue* queue) {
-    __u64 occupancy = queue->occupancy;
+    __s64 occupancy = queue->occupancy;
     __u64 capacity = queue->capacity;
     // unlike in the paper we assume that all queues are active
     // and that the queue size is proportional to the demand
-    __u64 r_i = queue->capacity;
+    __u64 r_i = capacity;
     __u64 x_i = r_i * BURST_TIME / ONE_SECOND;
     // calculate thresholds (0.5, 1.5)
     __u64 x_i_half = x_i >> 1;
@@ -117,20 +121,22 @@ static void burst_control(__u32 key, struct phantom_queue* queue) {
     x_i_plus += x_i_half;
     x_i_minus -= x_i_half;
 
-    if (occupancy > x_i_plus) {
+    if (occupancy > (__s64)x_i_plus) {
         // fill queue with magic packets
         if (queue->magic == 0) {
-            __u64 magic = capacity - occupancy;
+            // because occupancy passed the (signed) comparison above, it must
+            // now be >= 0 since capacity must be >= 0 and thus also x_i_plus
+            __u64 magic = capacity - (__u64)occupancy;
             __u64 res = __sync_val_compare_and_swap(&queue->magic, 0, magic);
             if (res == 0) {
                 // race won, add magic
-                __sync_fetch_and_add(&queue->occupancy, magic);
+                __sync_fetch_and_add(&queue->occupancy, (__s64)magic);
                 log("added %ld magic bytes to queue %d with occupancy %ld",
                     magic, key, occupancy);
             }
         }
 
-    } else if (occupancy < x_i_minus) {
+    } else if (occupancy < (__s64)x_i_minus) {
         // remove magic packets
         __u64 magic = queue->magic;
 
@@ -139,7 +145,7 @@ static void burst_control(__u32 key, struct phantom_queue* queue) {
             __u64 res = __sync_val_compare_and_swap(&queue->magic, magic, 0);
             if (res == magic) {
                 // race won, we get to decrement the occupancy
-                __sync_fetch_and_sub(&queue->occupancy, magic);
+                __sync_fetch_and_sub(&queue->occupancy, (__s64)magic);
                 log("subtracted %ld magic bytes from queue %d with occupancy "
                     "%ld",
                     magic, key, occupancy);
@@ -165,7 +171,7 @@ static __u64 try_increment_counter(
     if (prev == previous) {
         // the winner adds the drain
         // if we lose someone else will
-        diff = -drain;
+        diff = (__s64)-drain;
     }
 
     __u64 rv;
