@@ -313,7 +313,7 @@ static void classify_packet(
         default:
             goto default_error;
     }
-    *phantom_queue = port;
+    *phantom_queue = port % PHANTOM_QUEUES;
     *packet_size = data_end - data - header_size;
     return;
 default_error:
