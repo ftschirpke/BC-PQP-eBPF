@@ -88,22 +88,25 @@ int bypass_kernel_if_possible(struct xdp_md *ctx) {
     }
     __u64 next_hop_mac = *next_hop_mac_ptr;
     char new_dest[6] = {
-        ((next_hop_mac >> 0) & 0xff),  ((next_hop_mac >> 8) & 0xff),
-        ((next_hop_mac >> 16) & 0xff), ((next_hop_mac >> 24) & 0xff),
-        ((next_hop_mac >> 32) & 0xff), ((next_hop_mac >> 40) & 0xff),
+        (char)((next_hop_mac >> 0) & 0xff),
+        (char)((next_hop_mac >> 8) & 0xff),
+        (char)((next_hop_mac >> 16) & 0xff),
+        (char)((next_hop_mac >> 24) & 0xff),
+        (char)((next_hop_mac >> 32) & 0xff),
+        (char)((next_hop_mac >> 40) & 0xff),
     };
 
     __u32 egress_key = MAC_VM_EGRESS;
-    char *egress_mac_ptr = (char *)bpf_map_lookup_elem(&mac_map, &egress_key);
+    __u64 *egress_mac_ptr = (__u64 *)bpf_map_lookup_elem(&mac_map, &egress_key);
     if (egress_mac_ptr == NULL) {
         log("Could not find egress MAC address", 34);
         return XDP_PASS;
     }
     __u64 egress_mac = *egress_mac_ptr;
     char new_src[6] = {
-        ((egress_mac >> 0) & 0xff),  ((egress_mac >> 8) & 0xff),
-        ((egress_mac >> 16) & 0xff), ((egress_mac >> 24) & 0xff),
-        ((egress_mac >> 32) & 0xff), ((egress_mac >> 40) & 0xff),
+        (char)((egress_mac >> 0) & 0xff),  (char)((egress_mac >> 8) & 0xff),
+        (char)((egress_mac >> 16) & 0xff), (char)((egress_mac >> 24) & 0xff),
+        (char)((egress_mac >> 32) & 0xff), (char)((egress_mac >> 40) & 0xff),
     };
 
     __builtin_memcpy(eth_header->h_dest, new_dest, ETH_ALEN);
