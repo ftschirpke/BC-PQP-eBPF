@@ -11,15 +11,19 @@
 
 #define PARSING_ERROR -1
 
+#ifndef RX_QUEUES
 #define RX_QUEUES 4
+#endif
+
 #define PHANTOM_QUEUES 10
 
 #define MEBIBYTE (1 << 20)
 #define GIBIBYTE (1 << 30)
+#define TEBIBYTE (1 << 40)
 
 #define ONE_SECOND 1000000000L // 1s = 1e9 ns
 #define BURST_TIME 100000000L
-#define RATE MEBIBYTE // 1 MB/s
+#define RATE GIBIBYTE
 
 #define STRIP_HEADERS
 
@@ -34,6 +38,81 @@
     do {                                                                       \
     } while (0)
 #endif
+
+#define EGRESS_INTERFACE 3
+
+enum mac_index {
+    MAC_CLIENT,
+    MAC_VM_INGRESS,
+    MAC_VM_EGRESS,
+    MAC_SERVER,
+};
+
+#define MAC_ADDRESS_COUNT 4
+_Static_assert(MAC_SERVER < MAC_ADDRESS_COUNT,
+               "Need enough space for MAC addresses");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, __u32);
+    __type(value, __u64);
+    __uint(max_entries, 4);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
+} mac_map SEC(".maps");
+
+// bypass kernel networking stack by rewriting the MAC address to eth1
+int bypass_kernel_if_possible(struct xdp_md *ctx) {
+    void *data = (void *)(long)ctx->data;
+    void *data_end = (void *)(long)ctx->data_end;
+    struct hdr_cursor nh;
+    nh.pos = data;
+
+    struct ethhdr *eth_header;
+    int eth_type = parse_ethhdr(&nh, data_end, &eth_header);
+    eth_type = bpf_ntohs(eth_type);
+
+    switch (eth_type) {
+    case ETH_P_IP:
+        break;
+    default:
+        log("We are passing the packet to the kernel.");
+        return XDP_PASS;
+    }
+
+    __u32 server_key = MAC_SERVER;
+    __u64 *next_hop_mac_ptr =
+        (__u64 *)bpf_map_lookup_elem(&mac_map, &server_key);
+    if (next_hop_mac_ptr == NULL) {
+        log("Could not find next hop MAC address", 36);
+        return XDP_PASS;
+    }
+    __u64 next_hop_mac = *next_hop_mac_ptr;
+    char new_dest[6] = {
+        ((next_hop_mac >> 0) & 0xff),  ((next_hop_mac >> 8) & 0xff),
+        ((next_hop_mac >> 16) & 0xff), ((next_hop_mac >> 24) & 0xff),
+        ((next_hop_mac >> 32) & 0xff), ((next_hop_mac >> 40) & 0xff),
+    };
+
+    __u32 egress_key = MAC_VM_EGRESS;
+    char *egress_mac_ptr = (char *)bpf_map_lookup_elem(&mac_map, &egress_key);
+    if (egress_mac_ptr == NULL) {
+        log("Could not find egress MAC address", 34);
+        return XDP_PASS;
+    }
+    __u64 egress_mac = *egress_mac_ptr;
+    char new_src[6] = {
+        ((egress_mac >> 0) & 0xff),  ((egress_mac >> 8) & 0xff),
+        ((egress_mac >> 16) & 0xff), ((egress_mac >> 24) & 0xff),
+        ((egress_mac >> 32) & 0xff), ((egress_mac >> 40) & 0xff),
+    };
+
+    __builtin_memcpy(eth_header->h_dest, new_dest, ETH_ALEN);
+    __builtin_memcpy(eth_header->h_source, new_src, ETH_ALEN);
+    log("Kernel Bypass: Redirecting packet %lx -> %lx", 45, egress_mac,
+        next_hop_mac);
+
+    return bpf_redirect(EGRESS_INTERFACE, 0);
+}
 
 struct phantom_queue {
     // how many bytes are currently in this queue
@@ -344,8 +423,7 @@ drop:
     log("We are dropping the packet.");
     return XDP_DROP;
 pass:
-    log("We are passing the packet to the kernel.");
-    return XDP_PASS;
+    return bypass_kernel_if_possible(ctx);
 }
 
 char _license[] SEC("license") = "GPL";
