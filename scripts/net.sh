@@ -19,6 +19,7 @@ SERVER_VM_IF="eth1"
 CLIENT_VM_IP=192.168.101.100
 SERVER_VM_IP=192.168.102.100
 
+VM_NAME="localhost"
 
 help() {
 
@@ -95,7 +96,7 @@ EOF
 }
 
 debug__dump() {
-    is_vm=$(expr "$(uname -n)" == "ebpf")
+    is_vm=$([[ "$(uname -n)" == "$VM_NAME" ]] && echo true || echo false)
     decode=""
     side=""
     type=""
@@ -223,7 +224,7 @@ EOF
 }
 
 debug__ping() {
-    is_vm=$([[ "$(uname -n)" == "ebpf" ]] && echo true || echo false)
+    is_vm=$([[ "$(uname -n)" == "$VM_NAME" ]] && echo true || echo false)
     reverse=false
     master=false
     target=""
@@ -825,7 +826,7 @@ test__advanced() {
 }
 
 test() {
-    is_vm=$([[ "$(uname -n)" == "ebpf" ]] && echo true || echo false)
+    is_vm=$([[ "$(uname -n)" == "$VM_NAME" ]] && echo true || echo false)
     if [[ "$is_vm" == true ]]; then
         echo "All test commands must be executed on the host."
         return 1
