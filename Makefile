@@ -6,6 +6,8 @@ EBPF_SRC = bc-pqp-ebpf-kernel.c
 
 # === BUILDING THE SOURCE CODE ===
 
+RX_QUEUES ?= 4
+
 SRC_DIR = src
 BUILD_DIR = build
 
@@ -31,6 +33,7 @@ $(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CLANG) -S \
 	    -target bpf \
 	    -D __BPF_TRACING__ \
+		-DRX_QUEUES=$(RX_QUEUES) \
 		$(C_FLAGS) \
 	    $(WARN_FLAGS) \
 	    -emit-llvm -g \
@@ -42,6 +45,7 @@ $(EBPF_DEBUG_OBJ): $(BUILD_DIR)/$(DEBUG_PREFIX)%.o: $(SRC_DIR)/%.c
 	    -target bpf \
 	    -D __BPF_TRACING__ \
 		-D DEBUG \
+		-DRX_QUEUES=$(RX_QUEUES) \
 		$(C_FLAGS) \
 	    $(WARN_FLAGS) \
 	    -emit-llvm -g \
@@ -71,12 +75,12 @@ qemu: qemu/filesystem.qcow2
 		--name bc-pqp-ebpf \
 		--transient \
 		--destroy-on-exit \
-		--vcpus 4 \
+		--vcpus $(RX_QUEUES) \
 		--memory=4096 \
 		--disk=/var/lib/libvirt/images/bc-pqp-fs.qcow2 \
 		--boot kernel=/var/lib/libvirt/images/bc-pqp-vmlinux-${FLAVOR},initrd=/var/lib/libvirt/images/bc-pqp-initramfs-${FLAVOR},kernel_args="rootfstype=ext4 console=ttyS0 root=/dev/vda1 rw" \
-		--network bridge=br1,driver.queues=4 \
-		--network bridge=br2,driver.queues=4 \
+		--network bridge=br1,driver.queues=$(RX_QUEUES) \
+		--network bridge=br2,driver.queues=$(RX_QUEUES) \
 		--os-variant=alpinelinux3.20 \
 		--graphics none \
 		--autoconsole text
