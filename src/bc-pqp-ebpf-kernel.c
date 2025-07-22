@@ -53,8 +53,9 @@ enum mac_index {
 };
 
 #define MAC_ADDRESS_COUNT 4
-_Static_assert(MAC_SERVER < MAC_ADDRESS_COUNT,
-               "Need enough space for MAC addresses");
+_Static_assert(
+    MAC_SERVER < MAC_ADDRESS_COUNT, "Need enough space for MAC addresses"
+);
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -65,52 +66,53 @@ struct {
 } mac_map SEC(".maps");
 
 // bypass kernel networking stack by rewriting the MAC address to eth1
-int bypass_kernel_if_possible(struct xdp_md *ctx) {
-    void *data = (void *)(long)ctx->data;
-    void *data_end = (void *)(long)ctx->data_end;
+int bypass_kernel_if_possible(struct xdp_md* ctx) {
+    void* data = (void*)(long)ctx->data;
+    void* data_end = (void*)(long)ctx->data_end;
     struct hdr_cursor nh;
     nh.pos = data;
 
-    struct ethhdr *eth_header;
+    struct ethhdr* eth_header;
     int eth_type = parse_ethhdr(&nh, data_end, &eth_header);
     eth_type = bpf_ntohs(eth_type);
 
     switch (eth_type) {
-    case ETH_P_IP:
-        break;
-    default:
-        log("We are passing the packet to the kernel.");
-        return XDP_PASS;
+        case ETH_P_IP:
+            break;
+        default:
+            log("We are passing the packet to the kernel.");
+            return XDP_PASS;
     }
 
     __u32 server_key = MAC_SERVER;
-    __u64 *next_hop_mac_ptr =
-        (__u64 *)bpf_map_lookup_elem(&mac_map, &server_key);
+    __u64* next_hop_mac_ptr = (__u64*)bpf_map_lookup_elem(
+        &mac_map, &server_key
+    );
     if (next_hop_mac_ptr == NULL) {
         log("Could not find next hop MAC address", 36);
         return XDP_PASS;
     }
     __u64 next_hop_mac = *next_hop_mac_ptr;
-    char new_dest[6] = {
-        (char)((next_hop_mac >> 0) & 0xff),
-        (char)((next_hop_mac >> 8) & 0xff),
-        (char)((next_hop_mac >> 16) & 0xff),
-        (char)((next_hop_mac >> 24) & 0xff),
-        (char)((next_hop_mac >> 32) & 0xff),
-        (char)((next_hop_mac >> 40) & 0xff),
+    __u8 new_dest[6] = {
+        (__u8)((next_hop_mac >> 0) & 0xff),
+        (__u8)((next_hop_mac >> 8) & 0xff),
+        (__u8)((next_hop_mac >> 16) & 0xff),
+        (__u8)((next_hop_mac >> 24) & 0xff),
+        (__u8)((next_hop_mac >> 32) & 0xff),
+        (__u8)((next_hop_mac >> 40) & 0xff),
     };
 
     __u32 egress_key = MAC_VM_EGRESS;
-    __u64 *egress_mac_ptr = (__u64 *)bpf_map_lookup_elem(&mac_map, &egress_key);
+    __u64* egress_mac_ptr = (__u64*)bpf_map_lookup_elem(&mac_map, &egress_key);
     if (egress_mac_ptr == NULL) {
         log("Could not find egress MAC address", 34);
         return XDP_PASS;
     }
     __u64 egress_mac = *egress_mac_ptr;
-    char new_src[6] = {
-        (char)((egress_mac >> 0) & 0xff),  (char)((egress_mac >> 8) & 0xff),
-        (char)((egress_mac >> 16) & 0xff), (char)((egress_mac >> 24) & 0xff),
-        (char)((egress_mac >> 32) & 0xff), (char)((egress_mac >> 40) & 0xff),
+    __u8 new_src[6] = {
+        (__u8)((egress_mac >> 0) & 0xff),  (__u8)((egress_mac >> 8) & 0xff),
+        (__u8)((egress_mac >> 16) & 0xff), (__u8)((egress_mac >> 24) & 0xff),
+        (__u8)((egress_mac >> 32) & 0xff), (__u8)((egress_mac >> 40) & 0xff),
     };
 
     __builtin_memcpy(eth_header->h_dest, new_dest, ETH_ALEN);
@@ -142,6 +144,7 @@ struct {
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } xdp_general_map SEC(".maps");
 
+// todo increasing this doesn't help somehow?
 __u64 classification_counts[PHANTOM_QUEUES + 1] = {0};
 
 static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
@@ -276,15 +279,15 @@ static void classify_packet(
             struct iphdr* ip = (struct iphdr*)ip_start;
             if ((void*)(ip + 1) > data_end)
                 goto default_error;
-            int ip_hdr_len = ip->ihl * 4;
+            __u64 ip_hdr_len = ip->ihl * 4;
 
             if ((void*)ip + ip_hdr_len > data_end) {
                 goto default_error;
             }
             if (ip->frag_off != 0)
                 goto default_error;
-            void* transport_start = (void*)((unsigned char*)ip + ip_hdr_len);
-            char protocol = ip->protocol;
+            void* transport_start = (void*)((__u8*)ip + ip_hdr_len);
+            __u8 protocol = ip->protocol;
             switch (protocol) {
                 case IPPROTO_TCP: {
                     header_size += 20;
@@ -334,10 +337,13 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
 
     __u32 classification, packet_size;
     classify_packet(ctx, &classification, &packet_size);
-
     // sanity check for the loader
-    if (classification >= 0 && classification <= PHANTOM_QUEUES)
-        __sync_fetch_and_add(&classification_counts[classification], 1);
+    // todo this somehow only works with 8 as upper bound?
+    if (classification >= 0 && classification <= PHANTOM_QUEUES) {
+        classification_counts[classification]++;
+    } else {
+        goto abort;
+    }
 
 
     struct phantom_queue* queue = (struct phantom_queue*)bpf_map_lookup_elem(
