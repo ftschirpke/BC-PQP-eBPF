@@ -385,6 +385,8 @@ EOF
 
 }
 
+TEST_SIMPLE_DEFAULT_SAMPLING_INTERVAL="0.1"
+
 test__simple__server__help() {
 
 cat <<EOF
@@ -395,6 +397,9 @@ Usage:  $0 test simple server [ -h ] [ -r ]
     -h|--help           Show this help
     -r|--reverse        Reverse roles i.e. use client as server
                         and thus start the server in namespace $CLIENT_NAMESPACE
+    -i|--interval       Sampling interval in seconds i.e. interval between
+                        bandwidth and loss reports (default: $TEST_SIMPLE_DEFAULT_SAMPLING_INTERVAL)
+    -o|--output         File path to write JSON log values to (default: None, instead write human-readable to stdout)
 EOF
 
 }
@@ -402,6 +407,7 @@ EOF
 test__simple__server() {
 
     reverse=false
+    interval=""
     while [[ $# -gt 0 ]]; do
         case $1 in
             -h|--help)
@@ -410,6 +416,18 @@ test__simple__server() {
                 ;;
             -r|--reverse)
                 reverse=true
+                shift
+                ;;
+            -i|--interval)
+                [ -z "$interval" ] || { echo "Found option '$1' while already specified $interval as the interval."; return 1; }
+                shift
+                interval="$1"
+                shift
+                ;;
+            -o|--output)
+                [ -z "$output" ] || { echo "Found option '$1' while already specified $output as the output file."; return 1; }
+                shift
+                output="$1"
                 shift
                 ;;
             *)
@@ -426,7 +444,17 @@ test__simple__server() {
         namespace="$SERVER_NAMESPACE"
     fi
 
-    cmd="sudo ip netns exec $namespace iperf3 -s"
+    if [[ "$interval" == "" ]]; then
+        interval="$TEST_SIMPLE_DEFAULT_SAMPLING_INTERVAL"
+    fi
+
+    if [[ "$output" == "" ]]; then
+        output=""
+    else
+        output="-J --logfile $output"
+    fi
+
+    cmd="sudo ip netns exec $namespace iperf3 -s -i $interval $output"
 
     echo "Executing: $cmd"
     echo
@@ -436,7 +464,7 @@ test__simple__server() {
 }
 
 TEST_SIMPLE_DEFAULT_BITRATE="0"
-TEST_SIMPLE_DEFAULT_TIME="10"
+TEST_SIMPLE_DEFAULT_TIME="5"
 TEST_SIMPLE_DEFAULT_STREAMS="1"
 TEST_SIMPLE_DEFAULT_PACKET_SIZE="1448"
 
@@ -444,7 +472,7 @@ test__simple__client__help() {
 
 cat <<EOF
 Usage:  $0 test simple client [ -h ] [ -r ] [ -b bitrate ] [ -t seconds ]
-                      [ -P streams ] [ -o ] [ --udp | --tcp ] [ -s size ]
+                      [ -p streams ] [ -o ] [ --udp | --tcp ] [ -s size ]
 
     Start up an iperf3 client.
 
@@ -454,7 +482,9 @@ Usage:  $0 test simple client [ -h ] [ -r ] [ -b bitrate ] [ -t seconds ]
     -b|--bitrate <val>  Target birate in bits/s (default: $TEST_SIMPLE_DEFAULT_BITRATE i.e. unlimited)
     -t|--time <val>     Time to transmit in seconds (default: $TEST_SIMPLE_DEFAULT_TIME)
     -p|--parallel <val> Number of parallel client streams (default: $TEST_SIMPLE_DEFAULT_STREAMS)
-    -o|--output         Also print server output
+    -o|--output         File path to write JSON log values to (default: None, instead write human-readable to stdout)
+    -i|--interval       Sampling interval in seconds i.e. interval between
+                        bandwidth and loss reports (default: $TEST_SIMPLE_DEFAULT_SAMPLING_INTERVAL)
 
     --udp               (Default) Send UDP packets
     --tcp               Send TCP packets
@@ -469,9 +499,10 @@ test__simple__client() {
     rate=""
     time=""
     streams=""
-    get_server_output=false
+    output=""
     type=""
     size=""
+    interval=""
     while [[ $# -gt 0 ]]; do
         case $1 in
             -h|--help)
@@ -501,7 +532,9 @@ test__simple__client() {
                 shift
                 ;;
             -o|--output)
-                get_server_output=true
+                [ -z "$output" ] || { echo "Found option '$1' while already specified $output as the output file."; return 1; }
+                shift
+                output="$1"
                 shift
                 ;;
             --tcp|--udp)
@@ -513,6 +546,12 @@ test__simple__client() {
                 [ -z "$size" ] || { echo "Found option '$1' while already specified $size as the size."; return 1; }
                 shift
                 size="$1"
+                shift
+                ;;
+            -i|--interval)
+                [ -z "$interval" ] || { echo "Found option '$1' while already specified $interval as the interval."; return 1; }
+                shift
+                interval="$1"
                 shift
                 ;;
             *)
@@ -543,12 +582,6 @@ test__simple__client() {
         streams="$TEST_SIMPLE_DEFAULT_STREAMS"
     fi
     
-    if [[ "$get_server_output" == true ]]; then
-        get_server_output="--get-server-output"
-    else
-        get_server_output=""
-    fi
-
     if [[ "$type" == "" ]]; then
         type="--udp"
     fi
@@ -560,9 +593,19 @@ test__simple__client() {
         size="$TEST_SIMPLE_DEFAULT_PACKET_SIZE"
     fi
 
-    base_cmd="sudo ip netns exec $namespace iperf3 -c $target"
+    if [[ "$output" == "" ]]; then
+        output=""
+    else
+        output="-J --logfile $output"
+    fi
 
-    cmd="$base_cmd -b $rate -t $time -P $streams -l $size $type $get_server_output"
+    if [[ "$interval" == "" ]]; then
+        interval="$TEST_SIMPLE_DEFAULT_SAMPLING_INTERVAL"
+    fi
+
+    base_cmd="sudo ip netns exec $namespace iperf3 -i $interval -c $target --cport 12345"
+
+    cmd="$base_cmd -b $rate -t $time -P $streams -l $size $type $output"
 
     echo "Executing: $cmd"
     echo
@@ -630,7 +673,7 @@ test__advanced__server() {
 
 TEST_ADVANCED_DEFAULT_TEST="rrul_up"
 TEST_ADVANCED_DEFAULT_TIME="10"
-TEST_ADVANCED_DEFAULT_STEP_SIZE="0.1"
+TEST_ADVANCED_DEFAULT_STEP_SIZE="0.01"
 
 test__advanced__client__help() {
 
