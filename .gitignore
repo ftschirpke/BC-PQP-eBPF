@@ -9,3 +9,6 @@ qemu/qemu.pid
 boot/*
 
 .idea
+
+**/venv/**
+**/__pycache__/**
