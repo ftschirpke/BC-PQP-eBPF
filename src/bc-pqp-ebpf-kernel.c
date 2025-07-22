@@ -144,8 +144,14 @@ struct {
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } xdp_general_map SEC(".maps");
 
-// todo increasing this doesn't help somehow?
-__u64 classification_counts[PHANTOM_QUEUES + 1] = {0};
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, __u32);
+    __type(value, __u64);
+    __uint(max_entries, PHANTOM_QUEUES + 1);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
+} classification_counts SEC(".maps");
+
 
 static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
     // can be negative if we have a timing issue and someone who has started
@@ -340,7 +346,12 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
     // sanity check for the loader
     // todo this somehow only works with 8 as upper bound?
     if (classification >= 0 && classification <= PHANTOM_QUEUES) {
-        classification_counts[classification]++;
+        __u64* value = (__u64*)bpf_map_lookup_elem(
+            &classification_counts, &classification
+        );
+        if (value != NULL)
+            __sync_fetch_and_add(value, 1);
+        goto abort;
     } else {
         goto abort;
     }
