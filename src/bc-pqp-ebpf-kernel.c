@@ -258,7 +258,6 @@ static __u64 try_increment_counter(
     return rv;
 }
 
-
 /**
  * classify packet using destination port
  **/
@@ -267,7 +266,7 @@ static void classify_packet(
 ) {
     void* data = (void*)(long)ctx->data;
     void* data_end = (void*)(long)ctx->data_end;
-    __u32 header_size = 0;
+    __u32 header_size = sizeof(struct ethhdr);
     struct hdr_cursor nh;
     nh.pos = data;
 
@@ -275,52 +274,55 @@ static void classify_packet(
     int eth_type = parse_ethhdr(&nh, data_end, &eth);
     eth_type = bpf_ntohs(eth_type);
 
-    if ((void*)(eth + 1) > data_end)
-        goto default_error;
-    void* ip_start = (void*)eth + 1;
-    __u32 port;
+    __u32 port = 0;
     switch (eth_type) {
         case ETH_P_IP: {
-            header_size += 20;
-            struct iphdr* ip = (struct iphdr*)ip_start;
-            if ((void*)(ip + 1) > data_end)
-                goto default_error;
-            __u64 ip_hdr_len = ip->ihl * 4;
-
-            if ((void*)ip + ip_hdr_len > data_end) {
+            header_size += sizeof(struct iphdr);
+            struct iphdr* ip_header;
+            __s32 ip_parse_result = parse_iphdr(&nh, data_end, &ip_header);
+            if (ip_parse_result == -1) {
+                log("Cannot classify packet because IP parsing failed");
                 goto default_error;
             }
-            if (ip->frag_off != 0)
-                goto default_error;
-            void* transport_start = (void*)((__u8*)ip + ip_hdr_len);
-            __u8 protocol = ip->protocol;
-            switch (protocol) {
+            __u32 ip_type = (__u32) ip_parse_result;
+            switch (ip_type) {
                 case IPPROTO_TCP: {
-                    header_size += 20;
-                    struct tcphdr* tcp = (struct tcphdr*)transport_start;
-                    if ((void*)(tcp + 1) > data_end)
+                    struct tcphdr* tcp_header;
+                    __s32 tcp_header_size = parse_tcphdr(&nh, data_end, &tcp_header);
+                    if (tcp_header_size == -1) {
+                        log("Cannot classify packet because TCP parsing failed");
                         goto default_error;
-                    port = bpf_ntohs(tcp->source);
+                    }
+                    header_size += sizeof(struct tcphdr);
+                    port = bpf_ntohs(tcp_header->source);
                     break;
                 }
                 case IPPROTO_UDP: {
-                    header_size += 8;
-                    struct udphdr* udp = (struct udphdr*)transport_start;
-                    if ((void*)(udp + 1) > data_end)
+                    struct udphdr* udp_header;
+                    __s32 udp_header_size = parse_udphdr(&nh, data_end, &udp_header);
+                    if (udp_header_size == -1) {
+                        log("Cannot classify packet because UDP parsing failed");
                         goto default_error;
-                    port = bpf_ntohs(udp->source);
+                    }
+                    header_size += sizeof(struct udphdr);
+                    port = bpf_ntohs(udp_header->source);
                     break;
                 }
-                default:
+                default: {
+                    log("Cannot classify packet because of unknown packet protocol: %u", ip_type);
                     goto default_error;
+                }
             }
-            break;
         }
-        default:
-            goto default_error;
     }
     *phantom_queue = port % PHANTOM_QUEUES;
-    *packet_size = data_end - data - header_size;
+    *packet_size = data_end - data;
+    if (header_size < *packet_size) {
+        *packet_size -= header_size;
+    } else {
+        log("Cannot classify packet because parsed header is larger than parse packet");
+        goto default_error;
+    }
     return;
 default_error:
     *phantom_queue = PHANTOM_QUEUES;
@@ -349,10 +351,15 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
         __u64* value = (__u64*)bpf_map_lookup_elem(
             &classification_counts, &classification
         );
-        if (value != NULL)
+        if (value != NULL) {
+            log("Classification successful: [%u] = %lu", classification, *value);
             __sync_fetch_and_add(value, 1);
-        goto abort;
+        } else {
+            log("Classification unsuccessful");
+            goto abort;
+        }
     } else {
+        log("Aborting because classification is out of range");
         goto abort;
     }
 
