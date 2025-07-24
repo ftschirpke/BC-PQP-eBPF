@@ -3,7 +3,11 @@
 
 #include <linux/bpf.h>
 #include <linux/if_ether.h>
+#include <linux/in.h>
+#include <linux/ip.h>
+#include <linux/tcp.h>
 #include <linux/types.h>
+#include <linux/udp.h>
 
 #include <bpf/bpf_endian.h>
 #include <bpf/bpf_helpers.h>
@@ -49,8 +53,9 @@ enum mac_index {
 };
 
 #define MAC_ADDRESS_COUNT 4
-_Static_assert(MAC_SERVER < MAC_ADDRESS_COUNT,
-               "Need enough space for MAC addresses");
+_Static_assert(
+    MAC_SERVER < MAC_ADDRESS_COUNT, "Need enough space for MAC addresses"
+);
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
@@ -61,52 +66,53 @@ struct {
 } mac_map SEC(".maps");
 
 // bypass kernel networking stack by rewriting the MAC address to eth1
-int bypass_kernel_if_possible(struct xdp_md *ctx) {
-    void *data = (void *)(long)ctx->data;
-    void *data_end = (void *)(long)ctx->data_end;
+int bypass_kernel_if_possible(struct xdp_md* ctx) {
+    void* data = (void*)(long)ctx->data;
+    void* data_end = (void*)(long)ctx->data_end;
     struct hdr_cursor nh;
     nh.pos = data;
 
-    struct ethhdr *eth_header;
+    struct ethhdr* eth_header;
     int eth_type = parse_ethhdr(&nh, data_end, &eth_header);
     eth_type = bpf_ntohs(eth_type);
 
     switch (eth_type) {
-    case ETH_P_IP:
-        break;
-    default:
-        log("We are passing the packet to the kernel.");
-        return XDP_PASS;
+        case ETH_P_IP:
+            break;
+        default:
+            log("We are passing the packet to the kernel.");
+            return XDP_PASS;
     }
 
     __u32 server_key = MAC_SERVER;
-    __u64 *next_hop_mac_ptr =
-        (__u64 *)bpf_map_lookup_elem(&mac_map, &server_key);
+    __u64* next_hop_mac_ptr = (__u64*)bpf_map_lookup_elem(
+        &mac_map, &server_key
+    );
     if (next_hop_mac_ptr == NULL) {
         log("Could not find next hop MAC address", 36);
         return XDP_PASS;
     }
     __u64 next_hop_mac = *next_hop_mac_ptr;
-    char new_dest[6] = {
-        (char)((next_hop_mac >> 0) & 0xff),
-        (char)((next_hop_mac >> 8) & 0xff),
-        (char)((next_hop_mac >> 16) & 0xff),
-        (char)((next_hop_mac >> 24) & 0xff),
-        (char)((next_hop_mac >> 32) & 0xff),
-        (char)((next_hop_mac >> 40) & 0xff),
+    __u8 new_dest[6] = {
+        (__u8)((next_hop_mac >> 0) & 0xff),
+        (__u8)((next_hop_mac >> 8) & 0xff),
+        (__u8)((next_hop_mac >> 16) & 0xff),
+        (__u8)((next_hop_mac >> 24) & 0xff),
+        (__u8)((next_hop_mac >> 32) & 0xff),
+        (__u8)((next_hop_mac >> 40) & 0xff),
     };
 
     __u32 egress_key = MAC_VM_EGRESS;
-    __u64 *egress_mac_ptr = (__u64 *)bpf_map_lookup_elem(&mac_map, &egress_key);
+    __u64* egress_mac_ptr = (__u64*)bpf_map_lookup_elem(&mac_map, &egress_key);
     if (egress_mac_ptr == NULL) {
         log("Could not find egress MAC address", 34);
         return XDP_PASS;
     }
     __u64 egress_mac = *egress_mac_ptr;
-    char new_src[6] = {
-        (char)((egress_mac >> 0) & 0xff),  (char)((egress_mac >> 8) & 0xff),
-        (char)((egress_mac >> 16) & 0xff), (char)((egress_mac >> 24) & 0xff),
-        (char)((egress_mac >> 32) & 0xff), (char)((egress_mac >> 40) & 0xff),
+    __u8 new_src[6] = {
+        (__u8)((egress_mac >> 0) & 0xff),  (__u8)((egress_mac >> 8) & 0xff),
+        (__u8)((egress_mac >> 16) & 0xff), (__u8)((egress_mac >> 24) & 0xff),
+        (__u8)((egress_mac >> 32) & 0xff), (__u8)((egress_mac >> 40) & 0xff),
     };
 
     __builtin_memcpy(eth_header->h_dest, new_dest, ETH_ALEN);
@@ -134,45 +140,18 @@ struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
     __type(value, struct phantom_queue);
-    __uint(max_entries, PHANTOM_QUEUES);
+    __uint(max_entries, PHANTOM_QUEUES + 1);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } xdp_general_map SEC(".maps");
 
-enum packet_classification {
-    IPv4_UDP_0x00_TOS,
-    IPv4_UDP_0x20_TOS,
-    IPv4_UDP_0xb8_TOS,
-    IPv4_TCP_0x00_TOS,
-    IPv4_TCP_0x20_TOS,
-    IPv4_TCP_0xa0_TOS,
-    IPv4_TCP_0xb8_TOS,
-    IPv4_ICMP,
-    IPv6,
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, __u32);
+    __type(value, __u64);
+    __uint(max_entries, PHANTOM_QUEUES + 1);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
+} classification_counts SEC(".maps");
 
-    // default value if packet cannot be classified
-    // MUST(!) stay last value in enum
-    UNCLASSIFIED,
-};
-_Static_assert(
-    UNCLASSIFIED <= PHANTOM_QUEUES, "Number of different classifications must "
-                                    "be less or equal to phantom queue count"
-);
-
-
-__u64 classification_counts[UNCLASSIFIED + 1] = {0};
-
-const char* const classification_names[UNCLASSIFIED + 1] = {
-    [IPv4_UDP_0x00_TOS] = "IPv4 UDP with TOS of 0x00",
-    [IPv4_UDP_0x20_TOS] = "IPv4 UDP with TOS of 0x20",
-    [IPv4_UDP_0xb8_TOS] = "IPv4 UDP with TOS of 0xb8",
-    [IPv4_TCP_0x00_TOS] = "IPv4 TCP with TOS of 0x00",
-    [IPv4_TCP_0x20_TOS] = "IPv4 TCP with TOS of 0x20",
-    [IPv4_TCP_0xa0_TOS] = "IPv4 TCP with TOS of 0xa0",
-    [IPv4_TCP_0xb8_TOS] = "IPv4 TCP with TOS of 0xb8",
-    [IPv4_ICMP] = "IPv4 ICMP",
-    [IPv6] = "IPv6",
-    [UNCLASSIFIED] = "Unclassified",
-};
 
 static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
     // can be negative if we have a timing issue and someone who has started
@@ -279,98 +258,78 @@ static __u64 try_increment_counter(
     return rv;
 }
 
-// classify packet using 8-bit DiffServ value from IP's TOS header field
-static enum packet_classification classify_packet(struct xdp_md* ctx) {
+/**
+ * classify packet using destination port
+ **/
+static void classify_packet(
+    struct xdp_md* ctx, __u32* phantom_queue, __u32* packet_size
+) {
     void* data = (void*)(long)ctx->data;
     void* data_end = (void*)(long)ctx->data_end;
+    __u32 header_size = sizeof(struct ethhdr);
     struct hdr_cursor nh;
     nh.pos = data;
 
-    struct ethhdr* eth_header;
-    int eth_type = parse_ethhdr(&nh, data_end, &eth_header);
+    struct ethhdr* eth;
+    int eth_type = parse_ethhdr(&nh, data_end, &eth);
     eth_type = bpf_ntohs(eth_type);
 
-    if (eth_type != ETH_P_IP) {
-        if (eth_type == ETH_P_IPV6) {
-            return IPv6;
-        }
-        return UNCLASSIFIED;
-    }
-
-    struct iphdr* ipv4_header;
-    int ipv4_type = parse_iphdr(&nh, data_end, &ipv4_header);
-
-    switch (ipv4_type) {
-        case IPPROTO_UDP: {
-            switch (ipv4_header->tos) {
-                case 0x00:
-                    return IPv4_UDP_0x00_TOS;
-                case 0x20:
-                    return IPv4_UDP_0x20_TOS;
-                case 0xb8:
-                    return IPv4_UDP_0xb8_TOS;
-                default:
-                    bpf_trace_printk(
-                        "UNEXPECTED UDP tos: %x", 23, ipv4_header->tos
-                    );
-                    return UNCLASSIFIED;
+    __u32 port = 0;
+    switch (eth_type) {
+        case ETH_P_IP: {
+            header_size += sizeof(struct iphdr);
+            struct iphdr* ip_header;
+            __s32 ip_parse_result = parse_iphdr(&nh, data_end, &ip_header);
+            if (ip_parse_result == -1) {
+                log("Cannot classify packet because IP parsing failed");
+                goto default_error;
+            }
+            __u32 ip_type = (__u32) ip_parse_result;
+            switch (ip_type) {
+                case IPPROTO_TCP: {
+                    struct tcphdr* tcp_header;
+                    __s32 tcp_header_size = parse_tcphdr(&nh, data_end, &tcp_header);
+                    if (tcp_header_size == -1) {
+                        log("Cannot classify packet because TCP parsing failed");
+                        goto default_error;
+                    }
+                    header_size += sizeof(struct tcphdr);
+                    port = bpf_ntohs(tcp_header->source);
+                    break;
+                }
+                case IPPROTO_UDP: {
+                    struct udphdr* udp_header;
+                    __s32 udp_header_size = parse_udphdr(&nh, data_end, &udp_header);
+                    if (udp_header_size == -1) {
+                        log("Cannot classify packet because UDP parsing failed");
+                        goto default_error;
+                    }
+                    header_size += sizeof(struct udphdr);
+                    port = bpf_ntohs(udp_header->source);
+                    break;
+                }
+                default: {
+                    log("Cannot classify packet because of unknown packet protocol: %u", ip_type);
+                    goto default_error;
+                }
             }
         }
-        case IPPROTO_TCP:
-            switch (ipv4_header->tos) {
-                case 0x00:
-                    return IPv4_TCP_0x00_TOS;
-                case 0x20:
-                    return IPv4_TCP_0x20_TOS;
-                case 0xa0:
-                    return IPv4_TCP_0xa0_TOS;
-                case 0xb8:
-                    return IPv4_TCP_0xb8_TOS;
-                default:
-                    bpf_trace_printk(
-                        "UNEXPECTED TCP tos: %x", 23, ipv4_header->tos
-                    );
-                    return UNCLASSIFIED;
-            }
-        case IPPROTO_ICMP:
-            return IPv4_ICMP;
-        case PARSING_ERROR:
-        default:
-            return UNCLASSIFIED;
     }
+    *phantom_queue = port % PHANTOM_QUEUES;
+    *packet_size = data_end - data;
+    if (header_size < *packet_size) {
+        *packet_size -= header_size;
+    } else {
+        log("Cannot classify packet because parsed header is larger than parse packet");
+        goto default_error;
+    }
+    return;
+default_error:
+    *phantom_queue = PHANTOM_QUEUES;
+    *packet_size = data_end - data;
+    return;
 }
 
-static __u32 calculate_size(
-    struct xdp_md* ctx, enum packet_classification classification
-) {
-    __u32 full_size = ctx->data_end - ctx->data;
-#ifndef STRIP_HEADERS
-    return full_size;
-#else
-    __u32 ipv4_size = 20;
-    switch (classification) {
-        case IPv6:
-            // todo distinguish UDP/TCP/ICMP
-            return full_size - 40;
-        case IPv4_ICMP:
-            return full_size - ipv4_size - 8;
-        case IPv4_UDP_0x00_TOS:
-        case IPv4_UDP_0x20_TOS:
-        case IPv4_UDP_0xb8_TOS:
-            // we don't consider packets with an options field
-            return full_size - ipv4_size - 8;
-        case IPv4_TCP_0x00_TOS:
-        case IPv4_TCP_0x20_TOS:
-        case IPv4_TCP_0xa0_TOS:
-        case IPv4_TCP_0xb8_TOS:
-            // we don't consider packets with an options field
-            return full_size - ipv4_size - 20;
-        case UNCLASSIFIED:
-        default:
-            return full_size;
-    }
-#endif
-}
 
 static __u32 initialize(struct phantom_queue* queue) {
     // capacity was already set
@@ -384,19 +343,32 @@ SEC("xdp")
 int bc_pqp_xdp(struct xdp_md* ctx) {
     log("===== BC-PQP on rx-queue %u =====", ctx->rx_queue_index);
 
-    enum packet_classification classification = classify_packet(ctx);
-    __u32 key = UNCLASSIFIED;
-    if (classification <= UNCLASSIFIED) {
-        key = classification;
-        __sync_fetch_and_add(&classification_counts[key], 1);
+    __u32 classification, packet_size;
+    classify_packet(ctx, &classification, &packet_size);
+    // sanity check for the loader
+    // todo this somehow only works with 8 as upper bound?
+    if (classification >= 0 && classification <= PHANTOM_QUEUES) {
+        __u64* value = (__u64*)bpf_map_lookup_elem(
+            &classification_counts, &classification
+        );
+        if (value != NULL) {
+            log("Classification successful: [%u] = %lu", classification, *value);
+            __sync_fetch_and_add(value, 1);
+        } else {
+            log("Classification unsuccessful");
+            goto abort;
+        }
+    } else {
+        log("Aborting because classification is out of range");
+        goto abort;
     }
 
-    __u64 packet_size = calculate_size(ctx, classification);
+
     struct phantom_queue* queue = (struct phantom_queue*)bpf_map_lookup_elem(
-        &xdp_general_map, &key
+        &xdp_general_map, &classification
     );
     if (queue == NULL) {
-        log("Could not read element %u from map", key);
+        log("Could not read element %u from map", classification);
         goto abort;
     } else {
         if (queue->capacity == 0) {
@@ -406,13 +378,15 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
                 // race won, we can initialize our queue
                 res = initialize(queue);
                 if (res) {
-                    log("failed to initialize queue %u", key);
+                    log("failed to initialize queue %u", classification);
                     goto abort;
                 }
             }
         }
 
-        __u64 result = try_increment_counter(key, queue, packet_size);
+        __u64 result = try_increment_counter(
+            classification, queue, packet_size
+        );
         if (!result) {
             goto pass;
         } else {
