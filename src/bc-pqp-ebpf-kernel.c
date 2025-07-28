@@ -19,11 +19,9 @@
 #define RX_QUEUES 4
 #endif
 
-#ifndef FLOWS
-#define FLOWS 4
+#ifndef PHANTOM_QUEUES
+#define PHANTOM_QUEUES 4
 #endif
-
-#define PHANTOM_QUEUES (FLOWS + 1)
 
 #define MEBIBYTE (1 << 20)
 #define GIBIBYTE (1 << 30)
