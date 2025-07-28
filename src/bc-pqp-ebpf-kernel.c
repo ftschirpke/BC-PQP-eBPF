@@ -19,15 +19,25 @@
 #define RX_QUEUES 4
 #endif
 
-#define PHANTOM_QUEUES 10
+#ifndef FLOWS
+#define FLOWS 4
+#endif
+
+#define PHANTOM_QUEUES (FLOWS + 1)
 
 #define MEBIBYTE (1 << 20)
 #define GIBIBYTE (1 << 30)
 #define TEBIBYTE (1 << 40)
 
 #define ONE_SECOND 1000000000L // 1s = 1e9 ns
+                            
+#ifndef BURST_TIME
 #define BURST_TIME 100000000L
+#endif
+
+#ifndef RATE
 #define RATE GIBIBYTE
+#endif
 
 #define STRIP_HEADERS
 
@@ -352,6 +362,7 @@ static void classify_packet(
     }
     *phantom_queue = port % PHANTOM_QUEUES;
     *packet_size = data_end - data;
+#ifdef STRIP_HEADERS
     if (header_size < *packet_size) {
         *packet_size -= header_size;
     } else {
@@ -359,6 +370,7 @@ static void classify_packet(
             "packet");
         goto default_error;
     }
+#endif
     return;
 default_error:
     *phantom_queue = PHANTOM_QUEUES;

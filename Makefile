@@ -7,6 +7,9 @@ EBPF_SRC = bc-pqp-ebpf-kernel.c
 # === BUILDING THE SOURCE CODE ===
 
 RX_QUEUES ?= 4
+PHANTOM_QUEUES ?= 10
+BURST_TIME ?= 10000000L
+RATE ?= GIBIBYTE
 
 SRC_DIR = src
 BUILD_DIR = build
@@ -30,27 +33,34 @@ build: $(EBPF_OBJECTS)
 
 $(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	@mkdir -p $(BUILD_DIR)
-	$(CLANG) -S \
+	$(CLANG) \
 	    -target bpf \
 	    -D __BPF_TRACING__ \
 		-DRX_QUEUES=$(RX_QUEUES) \
+		-DPHANTOM_QUEUES=$(PHANTOM_QUEUES) \
+		-DBURST_TIME=$(BURST_TIME) \
+		-DRATE=$(RATE) \
 		$(C_FLAGS) \
 	    $(WARN_FLAGS) \
-	    -emit-llvm -g \
-		-o $(@:.o=.ll) $<
-	$(LLC) -march=bpf -filetype=obj -o $@ $(@:.o=.ll)
+	    -g \
+		-c $< \
+		-o $@
 
 $(EBPF_DEBUG_OBJ): $(BUILD_DIR)/$(DEBUG_PREFIX)%.o: $(SRC_DIR)/%.c
-	$(CLANG) -S \
+	@mkdir -p $(BUILD_DIR)
+	$(CLANG) \
 	    -target bpf \
 	    -D __BPF_TRACING__ \
 		-D DEBUG \
 		-DRX_QUEUES=$(RX_QUEUES) \
+		-DPHANTOM_QUEUES=$(PHANTOM_QUEUES) \
+		-DBURST_TIME=$(BURST_TIME) \
+		-DRATE=$(RATE) \
 		$(C_FLAGS) \
 	    $(WARN_FLAGS) \
-	    -emit-llvm -g \
-		-o $(@:.o=.ll) $<
-	$(LLC) -march=bpf -filetype=obj -o $@ $(@:.o=.ll)
+	    -g \
+		-c $< \
+		-o $@ 
 
 # === BUILDING THE VIRTUAL MACHINE ===
 
