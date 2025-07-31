@@ -2,5 +2,6 @@
 
 cd "$(dirname $0)"
 
-./load.sh
+./load.sh $1
+echo "watching logs"
 ./logs.sh
