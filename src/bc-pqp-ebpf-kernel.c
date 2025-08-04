@@ -284,13 +284,16 @@ static void classify_packet(
                 log("Cannot classify packet because IP parsing failed");
                 goto default_error;
             }
-            __u32 ip_type = (__u32) ip_parse_result;
+            __u32 ip_type = (__u32)ip_parse_result;
             switch (ip_type) {
                 case IPPROTO_TCP: {
                     struct tcphdr* tcp_header;
-                    __s32 tcp_header_size = parse_tcphdr(&nh, data_end, &tcp_header);
+                    __s32 tcp_header_size = parse_tcphdr(
+                        &nh, data_end, &tcp_header
+                    );
                     if (tcp_header_size == -1) {
-                        log("Cannot classify packet because TCP parsing failed");
+                        log("Cannot classify packet because TCP parsing failed"
+                        );
                         goto default_error;
                     }
                     header_size += sizeof(struct tcphdr);
@@ -299,9 +302,12 @@ static void classify_packet(
                 }
                 case IPPROTO_UDP: {
                     struct udphdr* udp_header;
-                    __s32 udp_header_size = parse_udphdr(&nh, data_end, &udp_header);
+                    __s32 udp_header_size = parse_udphdr(
+                        &nh, data_end, &udp_header
+                    );
                     if (udp_header_size == -1) {
-                        log("Cannot classify packet because UDP parsing failed");
+                        log("Cannot classify packet because UDP parsing failed"
+                        );
                         goto default_error;
                     }
                     header_size += sizeof(struct udphdr);
@@ -309,7 +315,9 @@ static void classify_packet(
                     break;
                 }
                 default: {
-                    log("Cannot classify packet because of unknown packet protocol: %u", ip_type);
+                    log("Cannot classify packet because of unknown packet "
+                        "protocol: %u",
+                        ip_type);
                     goto default_error;
                 }
             }
@@ -320,7 +328,8 @@ static void classify_packet(
     if (header_size < *packet_size) {
         *packet_size -= header_size;
     } else {
-        log("Cannot classify packet because parsed header is larger than parse packet");
+        log("Cannot classify packet because parsed header is larger than parse "
+            "packet");
         goto default_error;
     }
     return;
@@ -352,7 +361,8 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
             &classification_counts, &classification
         );
         if (value != NULL) {
-            log("Classification successful: [%u] = %lu", classification, *value);
+            log("Classification successful: [%u] = %lu", classification,
+                *value);
             __sync_fetch_and_add(value, 1);
         } else {
             log("Classification unsuccessful");
