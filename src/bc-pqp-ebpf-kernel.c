@@ -206,10 +206,13 @@ static void burst_control(__u32 key, struct phantom_queue* queue) {
             __u64 res = __sync_val_compare_and_swap(&queue->magic, magic, 0);
             if (res == magic) {
                 // race won, we get to decrement the occupancy
-                __sync_fetch_and_sub(&queue->occupancy, (__s64)magic);
-                log("subtracted %ld magic bytes from queue %d with occupancy "
-                    "%ld",
-                    magic, key, occupancy);
+                // (only if there is enough left)
+                if (occupancy >= (__s64)magic) {
+                    __sync_fetch_and_sub(&queue->occupancy, (__s64)magic);
+                    log("subtracted %ld magic bytes from queue %d with "
+                        "occupancy %ld",
+                        magic, key, occupancy);
+                }
             }
         }
     }
