@@ -64,7 +64,7 @@ docker: Dockerfile $(EBF_OBJECTS)
 	# build filesystem image and store as tar archive
 	DOCKER_BUILDKIT=1 ${SU_DOCKER} ${CNTNR_CMD} build --build-arg FLAVOR=${FLAVOR} --output "type=tar,dest=$(BUILD_DIR)/qemu/filesystem.tar" .
 	# extract kernel
-	tar --extract --file=$(BUILD_DIR)/qemu/filesystem.tar --wildcards "boot/*" --exclude=boot --one-top-level=$(BUILD_DIR)
+	tar --extract --file=$(BUILD_DIR)/qemu/filesystem.tar --wildcards "boot/*" --exclude=boot/boot --one-top-level=$(BUILD_DIR)
 
 qemu/filesystem.qcow2: docker 
 	# convert tar to qcow2 image
