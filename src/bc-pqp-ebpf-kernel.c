@@ -169,9 +169,14 @@ static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
     return (__u64)res / ONE_SECOND;
 }
 
-static void burst_control(__u32 key, struct phantom_queue* queue) {
-    __s64 occupancy = queue->occupancy;
-    __u64 capacity = queue->capacity;
+/**
+    Uses the supplied occupancy and capacity to calculate whether magic needs to
+   be added/removed. That amount if any is returned as a signed integer but is
+   not yet added to the occupancy.
+*/
+static __s64 burst_control(
+    __u32 key, struct phantom_queue* queue, __s64 occupancy, __u64 capacity
+) {
     // unlike in the paper we assume that all queues are active
     // and that the queue size is proportional to the demand
     __u64 r_i = capacity;
@@ -190,10 +195,9 @@ static void burst_control(__u32 key, struct phantom_queue* queue) {
             __u64 magic = capacity - (__u64)occupancy;
             __u64 res = __sync_val_compare_and_swap(&queue->magic, 0, magic);
             if (res == 0) {
-                // race won, add magic
-                __sync_fetch_and_add(&queue->occupancy, (__s64)magic);
-                log("added %ld magic bytes to queue %d with occupancy %ld",
+                log("should add %lu magic bytes to queue %d with occupancy %ld",
                     magic, key, occupancy);
+                return (__s64)magic;
             }
         }
 
@@ -205,40 +209,43 @@ static void burst_control(__u32 key, struct phantom_queue* queue) {
             // only drain magic packets if there are any
             __u64 res = __sync_val_compare_and_swap(&queue->magic, magic, 0);
             if (res == magic) {
-                // race won, we get to decrement the occupancy
-                __sync_fetch_and_sub(&queue->occupancy, (__s64)magic);
-                log("subtracted %ld magic bytes from queue %d with occupancy "
-                    "%ld",
+                log("should subtract %ld magic bytes from queue %d with "
+                    "occupancy %ld",
                     magic, key, occupancy);
+                return (__s64)-magic;
             }
         }
     }
+    return 0;
 }
 
 static __u64 try_increment_counter(
     __u32 key, struct phantom_queue* queue, __u64 packet_size
 ) {
-    burst_control(key, queue);
-
     __u64 now = bpf_ktime_get_ns();
     __u64 previous = queue->time;
     __u64 rate = queue->rate;
     __s64 occupancy = queue->occupancy;
+    __u64 capacity = queue->capacity;
     __u64 drain = calculate_drain(now, previous, rate);
 
     __s64 diff = 0;
     __u64 prev = __sync_val_compare_and_swap(&queue->time, previous, now);
 
     if (prev == previous) {
-        // the winner adds the drain
-        // if we lose someone else will
-        diff = (__s64)-drain;
+        // race won, we get to add the drain + magic
+        // todo we have already reat occupancy etc. but we change it in
+        // burst_control
+        __s64 magic = burst_control(key, queue, occupancy, capacity);
+        diff += magic;
+        diff -= drain;
     }
 
     __u64 rv;
+    __s64 new_occupancy = occupancy + diff + (__s64)packet_size;
 
     // check upper bound
-    if (occupancy + diff + ((__s64)packet_size) <= (__s64)queue->capacity) {
+    if (new_occupancy <= (__s64)capacity) {
         diff += packet_size;
         rv = 0;
         log("counter increment: success");
@@ -246,11 +253,20 @@ static __u64 try_increment_counter(
         rv = 1;
         log("counter increment: failure");
     }
-    // check lower bound
-    if (occupancy + diff > 0) {
+    // check lower bound (we only want to deplete the queue until zero)
+    if (new_occupancy >= 0) {
+        // we are positive, i.e. the normal case (add everything)
         __sync_fetch_and_add(&queue->occupancy, diff);
-    } else if (occupancy > 0) {
+    } else if (occupancy >= 0) {
+        // we don't have enough tokens left so instead of adding the whole large
+        // (negative) diff we just deplete the queue to zero
         __sync_fetch_and_sub(&queue->occupancy, occupancy);
+    } else {
+        // we somehow ended up with a negative occupancy, most likely we
+        // "overshot" at some point when multiple threads depleted the queue
+        // simultaneously (or there was a bug). In order to get back to normal
+        // we just add our packet.
+        __sync_fetch_and_add(&queue->occupancy, (__s64)packet_size);
     }
     log("occ: %li, pkt: %lu", occupancy, packet_size);
     log("drain: %li, diff: %li", drain, diff);
@@ -284,13 +300,17 @@ static void classify_packet(
                 log("Cannot classify packet because IP parsing failed");
                 goto default_error;
             }
-            __u32 ip_type = (__u32) ip_parse_result;
+            __u32 ip_type = (__u32)ip_parse_result;
             switch (ip_type) {
                 case IPPROTO_TCP: {
                     struct tcphdr* tcp_header;
-                    __s32 tcp_header_size = parse_tcphdr(&nh, data_end, &tcp_header);
+                    __s32 tcp_header_size = parse_tcphdr(
+                        &nh, data_end, &tcp_header
+                    );
                     if (tcp_header_size == -1) {
-                        log("Cannot classify packet because TCP parsing failed");
+                        log(
+                            "Cannot classify packet because TCP parsing failed"
+                        );
                         goto default_error;
                     }
                     header_size += sizeof(struct tcphdr);
@@ -299,9 +319,13 @@ static void classify_packet(
                 }
                 case IPPROTO_UDP: {
                     struct udphdr* udp_header;
-                    __s32 udp_header_size = parse_udphdr(&nh, data_end, &udp_header);
+                    __s32 udp_header_size = parse_udphdr(
+                        &nh, data_end, &udp_header
+                    );
                     if (udp_header_size == -1) {
-                        log("Cannot classify packet because UDP parsing failed");
+                        log(
+                            "Cannot classify packet because UDP parsing failed"
+                        );
                         goto default_error;
                     }
                     header_size += sizeof(struct udphdr);
@@ -309,7 +333,9 @@ static void classify_packet(
                     break;
                 }
                 default: {
-                    log("Cannot classify packet because of unknown packet protocol: %u", ip_type);
+                    log("Cannot classify packet because of unknown packet "
+                        "protocol: %u",
+                        ip_type);
                     goto default_error;
                 }
             }
@@ -320,7 +346,8 @@ static void classify_packet(
     if (header_size < *packet_size) {
         *packet_size -= header_size;
     } else {
-        log("Cannot classify packet because parsed header is larger than parse packet");
+        log("Cannot classify packet because parsed header is larger than parse "
+            "packet");
         goto default_error;
     }
     return;
@@ -352,7 +379,8 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
             &classification_counts, &classification
         );
         if (value != NULL) {
-            log("Classification successful: [%u] = %lu", classification, *value);
+            log("Classification successful: [%u] = %lu", classification,
+                *value);
             __sync_fetch_and_add(value, 1);
         } else {
             log("Classification unsuccessful");
