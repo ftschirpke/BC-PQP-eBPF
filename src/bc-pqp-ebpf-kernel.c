@@ -210,8 +210,8 @@ static __s64 burst_control(
             __u64 res = __sync_val_compare_and_swap(&queue->magic, magic, 0);
             if (res == magic) {
                 log("should subtract %ld magic bytes from queue %d with "
-                        "occupancy %ld",
-                        magic, key, occupancy);
+                    "occupancy %ld",
+                    magic, key, occupancy);
                 return (__s64)-magic;
             }
         }
@@ -266,7 +266,7 @@ static __u64 try_increment_counter(
         // "overshot" at some point when multiple threads depleted the queue
         // simultaneously (or there was a bug). In order to get back to normal
         // we just add our packet.
-        __sync_fetch_and_add(&queue->occupancy, packet_size);
+        __sync_fetch_and_add(&queue->occupancy, (__s64)packet_size);
     }
     log("occ: %li, pkt: %lu", occupancy, packet_size);
     log("drain: %li, diff: %li", drain, diff);
@@ -308,7 +308,8 @@ static void classify_packet(
                         &nh, data_end, &tcp_header
                     );
                     if (tcp_header_size == -1) {
-                        log("Cannot classify packet because TCP parsing failed"
+                        log(
+                            "Cannot classify packet because TCP parsing failed"
                         );
                         goto default_error;
                     }
@@ -322,7 +323,8 @@ static void classify_packet(
                         &nh, data_end, &udp_header
                     );
                     if (udp_header_size == -1) {
-                        log("Cannot classify packet because UDP parsing failed"
+                        log(
+                            "Cannot classify packet because UDP parsing failed"
                         );
                         goto default_error;
                     }
