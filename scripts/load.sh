@@ -6,11 +6,6 @@ else
     f=$1
 fi
 
-echo "Loading eBPF program $f"
-# timers need a userspace reference to work (thats why we use --pin-path)
-# see https://docs.ebpf.io/linux/helper-function/bpf_timer_init/
-xdp-loader load --pin-path /sys/fs/bpf/bc-pqp -m skb eth0 $f || exit 1
-
 echo "Resolving MAC addresses and writing them to eBPF map:"
 echo "If routes are not established, the MAC resolution might take a few seconds..."
 
@@ -38,6 +33,13 @@ HEX_VM_INGRESS_MAC=$(mac2hex $VM_INGRESS_MAC)
 HEX_VM_EGRESS_MAC=$(mac2hex $VM_EGRESS_MAC)
 HEX_CLIENT_MAC=$(mac2hex $CLIENT_MAC)
 HEX_SERVER_MAC=$(mac2hex $SERVER_MAC)
+
+echo "Loading eBPF program $f"
+# timers need a userspace reference to work (thats why we use --pin-path)
+# see https://docs.ebpf.io/linux/helper-function/bpf_timer_init/
+xdp-loader load --pin-path /sys/fs/bpf/bc-pqp -m skb eth0 $f || exit 1
+
+echo "Writing mac addresses to map"
 
 MAP_PATH="/sys/fs/bpf/bc-pqp/mac_map"
 
