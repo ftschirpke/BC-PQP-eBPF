@@ -84,6 +84,7 @@ qemu/filesystem.qcow2: container
 	sudo mv ./$(BUILD_DIR)/boot/initramfs-${FLAVOR} /var/lib/libvirt/images/bc-pqp-initramfs-${FLAVOR}
 
 qemu: qemu/filesystem.qcow2
+	ip netns list | grep -qzwF "ns1" || ./scripts/host_network_setup.sh
 	sudo virt-install \
 		--name bc-pqp-ebpf \
 		--transient \
@@ -99,6 +100,6 @@ qemu: qemu/filesystem.qcow2
 		--autoconsole text
 		
 clean:
-	-rm -f qemu/*.qcow2 qemu/*.tar $(BUILD_DIR)/* boot/*
+	rm -rf qemu/*.qcow2 qemu/*.tar $(BUILD_DIR)/* boot/*
 
 .PHONY: qemu clean
