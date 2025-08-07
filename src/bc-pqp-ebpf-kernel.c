@@ -257,10 +257,9 @@ static __u64 try_increment_counter(
     }
 
     __u64 rv;
-    __s64 new_occupancy = occupancy + diff + (__s64)packet_size;
 
     // check upper bound
-    if (new_occupancy <= (__s64)capacity) {
+    if (occupancy + diff + (__s64)packet_size <= (__s64)capacity) {
         diff += packet_size;
         rv = 0;
         log("counter increment: success");
@@ -269,20 +268,19 @@ static __u64 try_increment_counter(
         log("counter increment: failure");
     }
     // check lower bound (we only want to deplete the queue until zero)
-    if (new_occupancy >= 0) {
+    if (occupancy + diff >= 0) {
         // we are positive, i.e. the normal case (add everything)
         __sync_fetch_and_add(&queue->occupancy, diff);
-    } else if (occupancy >= 0) {
-        // we don't have enough tokens left so instead of adding the whole large
-        // (negative) diff we just deplete the queue to zero
-        __sync_fetch_and_sub(&queue->occupancy, occupancy);
     } else {
-        // we somehow ended up with a negative occupancy, most likely we
+        // we either
+        // 1. don't have enough tokens left so instead of adding the whole large
+        // (negative) diff we just deplete the queue to zero
+        // 2. somehow ended up with a negative occupancy, most likely we
         // "overshot" at some point when multiple threads depleted the queue
-        // simultaneously (or there was a bug). In order to get back to normal
-        // we just add our packet.
-        __sync_fetch_and_add(&queue->occupancy, (__s64)packet_size);
+        // simultaneously (or there was a bug)
+        __sync_fetch_and_sub(&queue->occupancy, occupancy);
     }
+
     log("occ: %li, pkt: %lu", occupancy, packet_size);
     log("drain: %li, diff: %li", drain, diff);
 
