@@ -45,12 +45,14 @@
 
 #define EGRESS_INTERFACE 3
 
-#ifdef CLASSIFY_BY_TARGET
-#define CLASSIFY_BY target
-#endif
-#ifdef CLASSIFY_BY_SOURCE
+#ifdef CLASSIFY_BY_DESTINATION
+#define CLASSIFY_BY dest
+#elif CLASSIFY_BY_SOURCE
+#define CLASSIFY_BY source
+#else
 #define CLASSIFY_BY source
 #endif
+
 
 enum mac_index {
     MAC_CLIENT,
