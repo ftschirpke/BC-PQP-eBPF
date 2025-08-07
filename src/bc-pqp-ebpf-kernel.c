@@ -47,7 +47,7 @@
 
 #ifdef CLASSIFY_BY_DESTINATION
 #define CLASSIFY_BY dest
-#elifdef CLASSIFY_BY_SOURCE
+#elif defined(CLASSIFY_BY_SOURCE)
 #define CLASSIFY_BY source
 #else
 #define CLASSIFY_BY source
