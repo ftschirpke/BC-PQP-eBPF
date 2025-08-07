@@ -54,9 +54,9 @@ $(EBPF_DEBUG_OBJ): $(BUILD_DIR)/$(DEBUG_PREFIX)%.o: $(SRC_DIR)/%.c
 
 # === BUILDING THE VIRTUAL MACHINE ===
 
-SU_DOCKER=$(shell id -nGz "${USER}" | grep -qzxF "docker" || type podman &> /dev/null || echo sudo)
+SU_DOCKER=$(shell id -nGz "${USER}" | grep -qzxF "docker" || type podman > /dev/null || echo sudo)
 SU_LVIRTD=$(shell id -nGz "${USER}" | grep -qzxF "libvirtd" || echo sudo)
-CNTNR_CMD=$(shell type podman &> /dev/null && echo podman || echo docker)
+CNTNR_CMD=$(shell type podman > /dev/null && echo podman || echo docker)
 FLAVOR=virt
 
 docker: Dockerfile $(EBF_OBJECTS)
