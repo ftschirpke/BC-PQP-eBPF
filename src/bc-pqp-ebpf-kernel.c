@@ -37,8 +37,6 @@
 #define RATE GIBIBYTE
 #endif
 
-#define STRIP_HEADERS
-
 #ifdef DEBUG
 #define log(fmt, ...)                                                          \
     do {                                                                       \
@@ -366,6 +364,8 @@ static void classify_packet(
             "packet");
         goto default_error;
     }
+#else
+    (void)header_size;
 #endif
     return;
 default_error:
