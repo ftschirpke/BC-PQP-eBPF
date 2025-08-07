@@ -19,15 +19,23 @@
 #define RX_QUEUES 4
 #endif
 
-#define PHANTOM_QUEUES 10
+#ifndef PHANTOM_QUEUES
+#define PHANTOM_QUEUES 4
+#endif
 
 #define MEBIBYTE (1 << 20)
 #define GIBIBYTE (1 << 30)
 #define TEBIBYTE (1 << 40)
 
 #define ONE_SECOND 1000000000L // 1s = 1e9 ns
+
+#ifndef BURST_TIME
 #define BURST_TIME 100000000L
+#endif
+
+#ifndef RATE
 #define RATE GIBIBYTE
+#endif
 
 #define STRIP_HEADERS
 
@@ -52,7 +60,6 @@
 #else
 #define CLASSIFY_BY source
 #endif
-
 
 enum mac_index {
     MAC_CLIENT,
@@ -160,7 +167,6 @@ struct {
     __uint(max_entries, PHANTOM_QUEUES + 1);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } classification_counts SEC(".maps");
-
 
 static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
     // can be negative if we have a timing issue and someone who has started
@@ -352,6 +358,7 @@ static void classify_packet(
     }
     *phantom_queue = port % PHANTOM_QUEUES;
     *packet_size = data_end - data;
+#ifdef STRIP_HEADERS
     if (header_size < *packet_size) {
         *packet_size -= header_size;
     } else {
@@ -359,6 +366,7 @@ static void classify_packet(
             "packet");
         goto default_error;
     }
+#endif
     return;
 default_error:
     *phantom_queue = PHANTOM_QUEUES;
@@ -366,14 +374,12 @@ default_error:
     return;
 }
 
-
 static __u32 initialize(struct phantom_queue* queue) {
     // capacity was already set
     queue->rate = RATE;
     queue->time = bpf_ktime_get_ns();
     return 0;
 }
-
 
 SEC("xdp")
 int bc_pqp_xdp(struct xdp_md* ctx) {
@@ -399,7 +405,6 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
         log("Aborting because classification is out of range");
         goto abort;
     }
-
 
     struct phantom_queue* queue = (struct phantom_queue*)bpf_map_lookup_elem(
         &xdp_general_map, &classification
