@@ -1,0 +1,29 @@
+name: Build
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - run: make container
+  lint:
+    runs-on: ubuntu-24.04
+    permissions:
+      pull-requests: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: cpp-linter/cpp-linter-action@v2.15.0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          version: 20
+          style: "file"
+          tidy-checks: ""
+          thread-comments: ${{ github.event_name == 'pull_request' && 'update' }}

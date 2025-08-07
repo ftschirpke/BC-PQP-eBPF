@@ -59,16 +59,19 @@ SU_LVIRTD=$(shell id -nGz "${USER}" | grep -qzxF "libvirtd" || echo sudo)
 CNTNR_CMD=$(shell type podman > /dev/null && echo podman || echo docker)
 FLAVOR=virt
 
-qemu/filesystem.qcow2: Dockerfile $(EBF_OBJECTS) 
+container: Dockerfile $(EBF_OBJECTS)
+	@mkdir -p $(BUILD_DIR)/qemu
 	# build filesystem image and store as tar archive
-	DOCKER_BUILDKIT=1 ${SU_DOCKER} ${CNTNR_CMD} build --build-arg FLAVOR=${FLAVOR} --output "type=tar,dest=qemu/filesystem.tar" .
+	DOCKER_BUILDKIT=1 ${SU_DOCKER} ${CNTNR_CMD} build --build-arg FLAVOR=${FLAVOR} --output "type=tar,dest=$(BUILD_DIR)/qemu/filesystem.tar" .
 	# extract kernel
-	tar --extract --file=qemu/filesystem.tar --wildcards "boot/*"
+	tar --extract --file=$(BUILD_DIR)/qemu/filesystem.tar --wildcards "boot/*" --exclude=boot/boot --one-top-level=$(BUILD_DIR)
+
+qemu/filesystem.qcow2: container 
 	# convert tar to qcow2 image
-	${SU_LVIRTD} virt-make-fs --partition --type=ext4 --format=qcow2 --size=+100M qemu/filesystem.tar qemu/filesystem.qcow2
-	sudo mv ./qemu/filesystem.qcow2 /var/lib/libvirt/images/bc-pqp-fs.qcow2
-	sudo mv ./boot/vmlinuz-${FLAVOR} /var/lib/libvirt/images/bc-pqp-vmlinux-${FLAVOR}
-	sudo mv ./boot/initramfs-${FLAVOR} /var/lib/libvirt/images/bc-pqp-initramfs-${FLAVOR}
+	${SU_LVIRTD} virt-make-fs --partition --type=ext4 --format=qcow2 --size=+100M $(BUILD_DIR)/qemu/filesystem.tar $(BUILD_DIR)/qemu/filesystem.qcow2
+	sudo mv ./$(BUILD_DIR)/qemu/filesystem.qcow2 /var/lib/libvirt/images/bc-pqp-fs.qcow2
+	sudo mv ./$(BUILD_DIR)/boot/vmlinuz-${FLAVOR} /var/lib/libvirt/images/bc-pqp-vmlinux-${FLAVOR}
+	sudo mv ./$(BUILD_DIR)/boot/initramfs-${FLAVOR} /var/lib/libvirt/images/bc-pqp-initramfs-${FLAVOR}
 
 qemu: qemu/filesystem.qcow2
 	sudo virt-install \
@@ -86,6 +89,6 @@ qemu: qemu/filesystem.qcow2
 		--autoconsole text
 		
 clean:
-	-rm -f qemu/*.qcow2 qemu/*.tar build/* boot/*
+	-rm -f qemu/*.qcow2 qemu/*.tar $(BUILD_DIR)/* boot/*
 
 .PHONY: qemu clean
