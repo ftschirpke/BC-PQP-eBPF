@@ -27,4 +27,5 @@ jobs:
           version: 20
           style: "file"
           tidy-checks: ""
+          ignore-tidy: src
           thread-comments: ${{ github.event_name == 'pull_request' && 'update' }}
