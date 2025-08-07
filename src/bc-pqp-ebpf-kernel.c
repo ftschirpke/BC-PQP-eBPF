@@ -37,8 +37,6 @@
 #define RATE GIBIBYTE
 #endif
 
-#define STRIP_HEADERS
-
 #ifdef DEBUG
 #define log(fmt, ...)                                                          \
     do {                                                                       \
