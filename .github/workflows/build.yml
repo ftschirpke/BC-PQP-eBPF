@@ -19,7 +19,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4.2.2
-      - run: apt-get update && apt-get install -y libbpf-dev libxdp-dev
+      - run: sudo apt-get update && sudo apt-get install -y libbpf-dev libxdp-dev
       - uses: cpp-linter/cpp-linter-action@v2.15.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
