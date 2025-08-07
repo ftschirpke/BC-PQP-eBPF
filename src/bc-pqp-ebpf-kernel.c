@@ -364,6 +364,8 @@ static void classify_packet(
             "packet");
         goto default_error;
     }
+#else
+    (void)header_size;
 #endif
     return;
 default_error:
