@@ -45,6 +45,13 @@
 
 #define EGRESS_INTERFACE 3
 
+#ifdef CLASSIFY_BY_TARGET
+#define CLASSIFY_BY target
+#endif
+#ifdef CLASSIFY_BY_SOURCE
+#define CLASSIFY_BY source
+#endif
+
 enum mac_index {
     MAC_CLIENT,
     MAC_VM_INGRESS,
@@ -314,7 +321,7 @@ static void classify_packet(
                         goto default_error;
                     }
                     header_size += sizeof(struct tcphdr);
-                    port = bpf_ntohs(tcp_header->source);
+                    port = bpf_ntohs(tcp_header->CLASSIFY_BY);
                     break;
                 }
                 case IPPROTO_UDP: {
@@ -329,7 +336,7 @@ static void classify_packet(
                         goto default_error;
                     }
                     header_size += sizeof(struct udphdr);
-                    port = bpf_ntohs(udp_header->source);
+                    port = bpf_ntohs(udp_header->CLASSIFY_BY);
                     break;
                 }
                 default: {
