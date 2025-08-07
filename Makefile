@@ -59,14 +59,14 @@ SU_LVIRTD=$(shell id -nGz "${USER}" | grep -qzxF "libvirtd" || echo sudo)
 CNTNR_CMD=$(shell type podman > /dev/null && echo podman || echo docker)
 FLAVOR=virt
 
-docker: Dockerfile $(EBF_OBJECTS)
+container: Dockerfile $(EBF_OBJECTS)
 	@mkdir -p $(BUILD_DIR)/qemu
 	# build filesystem image and store as tar archive
 	DOCKER_BUILDKIT=1 ${SU_DOCKER} ${CNTNR_CMD} build --build-arg FLAVOR=${FLAVOR} --output "type=tar,dest=$(BUILD_DIR)/qemu/filesystem.tar" .
 	# extract kernel
 	tar --extract --file=$(BUILD_DIR)/qemu/filesystem.tar --wildcards "boot/*" --exclude=boot/boot --one-top-level=$(BUILD_DIR)
 
-qemu/filesystem.qcow2: docker 
+qemu/filesystem.qcow2: container 
 	# convert tar to qcow2 image
 	${SU_LVIRTD} virt-make-fs --partition --type=ext4 --format=qcow2 --size=+100M $(BUILD_DIR)/qemu/filesystem.tar $(BUILD_DIR)/qemu/filesystem.qcow2
 	sudo mv ./$(BUILD_DIR)/qemu/filesystem.qcow2 /var/lib/libvirt/images/bc-pqp-fs.qcow2

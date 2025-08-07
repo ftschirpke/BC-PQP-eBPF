@@ -11,8 +11,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4.2.2
-      - uses: docker/setup-docker-action@v4.3.0
-      - run: make docker
+      - run: make container
   lint:
     runs-on: ubuntu-24.04
     permissions:
