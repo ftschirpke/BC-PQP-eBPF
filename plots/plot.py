@@ -2,11 +2,13 @@ import bisect
 import gzip
 import json
 
+from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
 
 import matplotlib.pyplot as plt
+import seaborn as sns
 import scienceplots
 
 plt.style.use("science")
@@ -34,8 +36,8 @@ set_fontsize(16)
 @dataclass
 class FlentPlotOptions:
     key: str = "TCP upload"
-    interval_start: int = 0
-    interval_end: int = 20
+    interval_start: float = 0
+    interval_end: float = 20
     enforced_gbit_rate: float = 1.0
     show_bounds: bool = True
     show_avg: bool = True
@@ -43,11 +45,16 @@ class FlentPlotOptions:
 
 @dataclass
 class IPerf3PlotOptions:
-    interval_width: float = 0.1
     test_end: float = 5
+    interval_start: Optional[float] = None
+    interval_end: Optional[float] = None
     remove_headers: bool = False
+    plot_sum: bool = False
+    stack_streams: bool = True
     send_gbit_rate: Optional[float] = None
     enforced_gbit_rate: float = 1.0
+    show_enforced_rate: bool = True
+    show_tail: bool = False
 
 
 @dataclass
@@ -56,6 +63,7 @@ class ExplorePlotOptions:
     flent_options = FlentPlotOptions()
     iperf3_files: List[Path] = field(default_factory=list)
     iperf3_options = IPerf3PlotOptions()
+    legend: bool = True
 
     def clear_files(self):
         self.flent_files.clear()
@@ -89,7 +97,8 @@ def exploration_plots(options: ExplorePlotOptions):
 
         plot_iperf3_file(fig, ax, file, options.iperf3_options)
 
-    fig.legend()
+    if options.legend:
+        fig.legend()
     plt.show()
 
 
@@ -144,49 +153,170 @@ def plot_flent_file(fig, ax, file: Path, options: FlentPlotOptions):
 
 def _prep_iperf3_data(data_file: Path, options: IPerf3PlotOptions):
     with open(data_file, "r") as f:
-        data = json.load(f)
+        raw_text = f.read().lstrip()
 
-    # TODO: plot streams separately if requested
+    is_client = None
 
-    xs = []
-    ys = []
+    total_data_by_port = defaultdict(list)
 
-    for i, interval in enumerate(data["intervals"]):
-        s = interval["sum"]
-        if s["start"] >= options.test_end:
-            break
-        width = s["end"] - s["start"]
-        assert abs(width - options.interval_width) < width * 0.01, f"{width=} doesn't match {options.interval_width=}"
-        xs.append(i * options.interval_width)
-        bits = s["bytes"] * 8
-        if options.remove_headers:
-            bits -= s["packets"] * 28 * 8  # subtract udp header size
-        ys.append(bits / (1024**3 * options.interval_width))
+    min_test_start_sec = None
 
-    # when using step, we need to re-add the last data point
-    xs.append(xs[-1] + options.interval_width)
-    ys.append(ys[-1])
+    decoder = json.JSONDecoder()
+    while raw_text:
+        partial_data, index = decoder.raw_decode(raw_text)
+        raw_text = raw_text[index:].lstrip()
+        if "error" in partial_data:
+            err = partial_data["error"]
+            if err == "interrupt - the server has terminated by signal Interrupt(2)":
+                continue
+            raise RuntimeError(f"Found unexpected error '{err}' in JSON")
 
-    return xs, ys
+        this_is_client = "connecting_to" in partial_data["start"]
+        if is_client is None:
+            is_client = this_is_client
+        else:
+            assert is_client == this_is_client, "Cannot mix client and server files"
+
+        target_rate = partial_data["start"]["target_bitrate"] / 1024**3
+        if options.send_gbit_rate is not None:
+            assert target_rate != 0 and abs((target_rate - options.send_gbit_rate) / target_rate) <= 0.01
+
+        test_start_sec = partial_data["start"]["timestamp"]["timesecs"]
+        if min_test_start_sec is None or test_start_sec < min_test_start_sec:
+            min_test_start_sec = test_start_sec
+
+        socket_ports = {}
+        for socket_data in partial_data["start"]["connected"]:
+            socket_number = socket_data["socket"]
+            port_key = "local_port" if is_client else "remote_port"
+            port = socket_data[port_key]
+            socket_ports[socket_number] = port
+
+        is_first = {socket: True for socket in socket_ports.keys()}
+        is_first_sum = True
+
+        data_by_port = {"sum": ([], [])}
+
+        def val_func(byte_val, start, end):
+            return (byte_val * 8 / 1024**3) / (end - start)
+
+        for i, interval_data in enumerate(partial_data["intervals"]):
+            for stream_data in interval_data["streams"]:
+                socket = stream_data["socket"]
+                port = socket_ports[socket]
+                if port not in data_by_port:
+                    data_by_port[port] = ([], [])
+                xs, ys = data_by_port[port]
+                val = val_func(stream_data["bytes"], stream_data["start"], stream_data["end"])
+                if is_first[socket]:
+                    xs.append(stream_data["start"])
+                    ys.append(val)
+                    is_first[socket] = False
+                xs.append(stream_data["end"])
+                ys.append(val)
+
+            sum_data = interval_data["sum"]
+            xs, ys = data_by_port["sum"]
+            val = val_func(sum_data["bytes"], sum_data["start"], sum_data["end"])
+
+            if is_first_sum:
+                xs.append(sum_data["start"])
+                ys.append(val)
+                is_first_sum = False
+            xs.append(sum_data["end"])
+            ys.append(val)
+
+        if options.stack_streams:
+            ports_sorted = list(sorted(socket_ports.values()))
+            for i, (prev_port, port) in enumerate(zip(ports_sorted[:-1], ports_sorted[1:])):
+                prev_xs, prev_ys = data_by_port[prev_port]
+                xs, ys = data_by_port[port]
+
+                stacked_xs = []
+                stacked_ys = []
+
+                i = 0
+                j = 0
+                while i < len(prev_xs) and j < len(xs):
+                    stacked_ys.append(prev_ys[i] + ys[j])
+                    if prev_xs[i] == xs[j]:
+                        stacked_xs.append(xs[j])
+                        i += 1
+                        j += 1
+                    elif prev_xs[i] < xs[j]:
+                        stacked_xs.append(prev_xs[i])
+                        i += 1
+                    else:
+                        stacked_xs.append(xs[j])
+                        j += 1
+                if options.show_tail:
+                    while i < len(prev_xs):
+                        stacked_xs.append(prev_xs[i])
+                        stacked_ys.append(prev_ys[i])
+                        i += 1
+                    while j < len(xs):
+                        stacked_xs.append(xs[j])
+                        stacked_ys.append(ys[j])
+                        j += 1
+
+                assert len(stacked_xs) == len(stacked_ys), f"{len(stacked_xs)=} != {len(stacked_ys)=}"
+
+                data_by_port[port] = stacked_xs, stacked_ys
+
+        for key, (xs, ys) in data_by_port.items():
+            total_data_by_port[key].append((test_start_sec, xs, ys))
+
+    return min_test_start_sec, is_client, total_data_by_port
 
 
 def plot_iperf3_file(fig, ax, file: Path, options: IPerf3PlotOptions):
-    xs, ys = _prep_iperf3_data(file, options)
+    min_test_start, is_client, data_by_port = _prep_iperf3_data(file, options)
 
-    ax.step(xs, ys, where="post",
-            label=f"UDP upload in Gbit/s sampled at {options.interval_width}s intervals")
+    colors = sns.color_palette()
+    color_idx = 0
 
-    if options.send_gbit_rate and any("client" in part for part in file.parts):
-        ax.hlines(options.send_gbit_rate, min(xs), max(xs), colors="green",
+    color_by_port = {}
+
+    min_x = None
+    max_x = None
+
+    for key, entries in data_by_port.items():
+        if key == "sum" and not options.plot_sum:
+            continue
+        for test_start, xs, ys in entries:
+            name = f"Port {key}" if key != "sum" else "Sum"
+
+            if name not in color_by_port:
+                color = colors[color_idx % len(colors)]
+                color_idx += 1
+                color_by_port[name] = color
+            color = color_by_port[name]
+
+            xs = list(map(lambda x: x + test_start - min_test_start, xs))
+            if min_x is None or xs[0] < min_x:
+                min_x = xs[0]
+            if max_x is None or xs[-1] > max_x:
+                max_x = xs[-1]
+
+            ax.step(xs, ys, where="pre", label=name, color=color)
+
+            if not is_client and options.show_avg:
+                avg = 0
+                for prev_x, x, y in zip(xs[:-1], xs[1:], ys[1:]):
+                    avg += y * (x - prev_x)
+                avg /= xs[-1] - xs[0]
+                ax.hlines(avg, min(xs), max(xs), colors=color,
+                          label=f"Actually enforced rate ({name})", linestyle="dashed", linewidth=2)
+
+    if options.send_gbit_rate and is_client:
+        ax.hlines(options.send_gbit_rate, min_x, max_x, colors="green",
                   label="Sending rate", linestyle="dashed", linewidth=2)
-    if any("server" in part for part in file.parts):
+    if options.show_enforced_rate and not is_client:
         ax.hlines(options.enforced_gbit_rate, min(xs), max(xs), colors="green",
                   label="Rate to enforce", linestyle="dashed", linewidth=2)
-        if options.show_avg:
-            value_ys = [y for y in ys if y is not None]
-            avg = sum(value_ys) / len(value_ys)
-            ax.hlines(avg, min(xs), max(xs), colors="red",
-                      label="Actually enforced rate", linestyle="dashed", linewidth=2)
+
+    ax.set_xlim(options.interval_start, options.interval_end)
+    ax.set_ylim(0, None)
 
     ax.set_xlabel("Time after test start in seconds")
     ax.set_ylabel("Rate in Gbit/s")
@@ -265,27 +395,41 @@ def save_or_show(fig: plt.figure, path: Path, save_plot: bool):
 
 
 if __name__ == "__main__":
-    save_plots = input("Press 'S' to save the plots instead of showing them: ").lower().startswith("s")
-    bursty_plot(save_plots)
-    progress_plot(save_plots)
+    # save_plots = input("Press 'S' to save the plots instead of showing them: ").lower().startswith("s")
+    # bursty_plot(save_plots)
+    # progress_plot(save_plots)
 
-    if save_plots or input("Press ENTER to continue with \"exploration plots\" "):
-        # do not show "exploration plots"
-        exit(0)
+    # if save_plots or input("Press ENTER to continue with \"exploration plots\" "):
+    #     # do not show "exploration plots"
+    #     exit(0)
 
     options = ExplorePlotOptions()
-    options.iperf3_files.append(DATA_DIR / "bc-test" / "non-fluent-client.json")
-    options.iperf3_files.append(DATA_DIR / "bc-test" / "non-fluent-server.json")
-    options.iperf3_options.send_gbit_rate = 6 * 1000**3 / 1024**3
-    options.iperf3_options.show_avg = True
+    options.iperf3_files.append(DATA_DIR / "debug" / "client.json")
+    options.iperf3_files.append(DATA_DIR / "debug" / "server.json")
+    # options.iperf3_options.send_gbit_rate = 20 * 1000**2 / 1024**3
+    # options.iperf3_options.interval_start = 0
+    # options.iperf3_options.interval_end = 1
+    options.iperf3_options.show_avg = False
+    options.iperf3_options.show_enforced_rate = False
+    options.legend = False
     exploration_plots(options)
 
     options.clear_files()
-    options.iperf3_files.append(DATA_DIR / "bc-test" / "fluent-pqp-client.json")
-    options.iperf3_files.append(DATA_DIR / "bc-test" / "fluent-pqp-server.json")
+    options.iperf3_files.append(DATA_DIR / "debug" / "lowrate-client.json")
+    options.iperf3_files.append(DATA_DIR / "debug" / "lowrate-server.json")
     exploration_plots(options)
 
     options.clear_files()
-    options.iperf3_files.append(DATA_DIR / "bc-test" / "bc-pqp-client.json")
-    options.iperf3_files.append(DATA_DIR / "bc-test" / "bc-pqp-server.json")
+    options.iperf3_files.append(DATA_DIR / "burst" / "full_client.json")
+    options.iperf3_files.append(DATA_DIR / "burst" / "full_server.json")
     exploration_plots(options)
+
+    options.clear_files()
+    options.iperf3_files.append(DATA_DIR / "burst" / "full_single_client.json")
+    options.iperf3_files.append(DATA_DIR / "burst" / "full_single_server.json")
+    exploration_plots(options)
+
+    # options.clear_files()
+    # options.iperf3_files.append(DATA_DIR / "bc-test" / "bc-pqp-client.json")
+    # options.iperf3_files.append(DATA_DIR / "bc-test" / "bc-pqp-server.json")
+    # exploration_plots(options)
