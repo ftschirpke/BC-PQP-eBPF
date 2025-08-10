@@ -148,6 +148,8 @@ struct phantom_queue {
     __u64 rate;
     // how much of the occupancy is actually magic
     __u64 magic;
+    // counter for burst control
+    __u64 burst_occupancy;
 };
 
 struct {
@@ -188,11 +190,21 @@ static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
    not yet added to the occupancy.
 */
 static __s64 burst_control(
-    __u32 key, struct phantom_queue* queue, __s64 occupancy, __u64 capacity
+    __u32 key, struct phantom_queue* queue, __u64 previous, __u64 now,
+    __u64 packet_size
 ) {
     // unlike in the paper we assume that all queues are active
     // and that the queue size is proportional to the demand
-    __u64 r_i = capacity;
+
+    // manage burst queue
+    if (previous / BURST_TIME != now / BURST_TIME) {
+        // we have rolled over to another BURST_TIME slot
+        __sync_lock_test_and_set(&queue->burst_occupancy, 0);
+    }
+    __sync_fetch_and_add(&queue->burst_occupancy, packet_size);
+
+    __u64 burst_occupancy = queue->burst_occupancy;
+    __u64 r_i = queue->rate;
     __u64 x_i = r_i * BURST_TIME / ONE_SECOND;
     // calculate thresholds (0.5, 1.5)
     __u64 x_i_half = x_i >> 1;
@@ -200,21 +212,20 @@ static __s64 burst_control(
     x_i_plus += x_i_half;
     x_i_minus -= x_i_half;
 
-    if (occupancy > (__s64)x_i_plus) {
+    if (burst_occupancy > x_i_plus) {
         // fill queue with magic packets
         if (queue->magic == 0) {
-            // because occupancy passed the (signed) comparison above, it must
-            // now be >= 0 since capacity must be >= 0 and thus also x_i_plus
-            __u64 magic = capacity - (__u64)occupancy;
+            __u64 magic = queue->capacity - burst_occupancy;
             __u64 res = __sync_val_compare_and_swap(&queue->magic, 0, magic);
             if (res == 0) {
-                log("should add %lu magic bytes to queue %d with occupancy %ld",
-                    magic, key, occupancy);
+                log("should add %lu magic bytes to queue %d with burst "
+                    "occupancy %lu",
+                    magic, key, burst_occupancy);
                 return (__s64)magic;
             }
         }
 
-    } else if (occupancy < (__s64)x_i_minus) {
+    } else if (burst_occupancy < x_i_minus) {
         // remove magic packets
         __u64 magic = queue->magic;
 
@@ -222,9 +233,9 @@ static __s64 burst_control(
             // only drain magic packets if there are any
             __u64 res = __sync_val_compare_and_swap(&queue->magic, magic, 0);
             if (res == magic) {
-                log("should subtract %ld magic bytes from queue %d with "
-                    "occupancy %ld",
-                    magic, key, occupancy);
+                log("should subtract %ld magic bytes from queue %d with burst "
+                    "occupancy %lu",
+                    magic, key, burst_occupancy);
                 return (__s64)-magic;
             }
         }
@@ -249,7 +260,7 @@ static __u64 try_increment_counter(
         // race won, we get to add the drain + magic
         // todo we have already reat occupancy etc. but we change it in
         // burst_control
-        __s64 magic = burst_control(key, queue, occupancy, capacity);
+        __s64 magic = burst_control(key, queue, previous, now, packet_size);
         diff += magic;
         diff -= drain;
     }
