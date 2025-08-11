@@ -215,7 +215,7 @@ static __s64 burst_control(
     if (burst_occupancy > x_i_plus) {
         // fill queue with magic packets
         if (queue->magic == 0) {
-            __u64 magic = queue->capacity - burst_occupancy;
+            __u64 magic = queue->capacity - queue->occupancy;
             __u64 res = __sync_val_compare_and_swap(&queue->magic, 0, magic);
             if (res == 0) {
                 log("should add %lu magic bytes to queue %d with burst "
