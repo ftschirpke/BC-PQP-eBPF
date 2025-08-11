@@ -197,13 +197,22 @@ static __s64 burst_control(
     // and that the queue size is proportional to the demand
 
     // manage burst queue
-    if (previous / BURST_TIME != now / BURST_TIME) {
-        // we have rolled over to another BURST_TIME slot
-        __sync_lock_test_and_set(&queue->burst_occupancy, 0);
+    if (previous / BURST_TIME == now / BURST_TIME) {
+        __sync_fetch_and_add(&queue->burst_occupancy, packet_size);
+        // we are still in the middle of a burst time slot and thus
+        // can't yet say how much throughput happened in that slot
+        return 0;
     }
-    __sync_fetch_and_add(&queue->burst_occupancy, packet_size);
+    // we have rolled over to a new BURST_TIME slot
+    // we can be sure that nobody else tries to reset burst_occupancy because we
+    // have won the compare_and_swap on the timestamp, and we can guarantee that
+    // there is always just one pair of previous / now timestamps that
+    // "crosses a BURST_TIME border" because our time is monotonic
+    __u64 burst_occupancy = __sync_lock_test_and_set(
+        &queue->burst_occupancy, 0
+    );
 
-    __u64 burst_occupancy = queue->burst_occupancy;
+
     __u64 r_i = queue->rate;
     __u64 x_i = r_i * BURST_TIME / ONE_SECOND;
     // calculate thresholds (0.5, 1.5)
@@ -254,9 +263,10 @@ static __u64 try_increment_counter(
     __u64 drain = calculate_drain(now, previous, rate);
 
     __s64 diff = 0;
-    __u64 prev = __sync_val_compare_and_swap(&queue->time, previous, now);
 
-    if (prev == previous) {
+    if (previous < now
+        && __sync_val_compare_and_swap(&queue->time, previous, now)
+               == previous) {
         // race won, we get to add the drain + magic
         // todo we have already reat occupancy etc. but we change it in
         // burst_control
