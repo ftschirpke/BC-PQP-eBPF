@@ -195,22 +195,30 @@ static __s64 burst_control(
 ) {
     // unlike in the paper we assume that all queues are active
     // and that the queue size is proportional to the demand
-
+    __u8 rolled_over;
+    __u64 burst_occupancy;
     // manage burst queue
-    if (previous / BURST_TIME == now / BURST_TIME) {
+
+    // the following is equivalent to
+    // 'previous / BURST_TIME == now / BURST_TIME'
+    // in the below version we only need one modulo calculation (instead of 2
+    // divisions) which should be faster
+    if ((previous % BURST_TIME) + (now - previous) < BURST_TIME) {
+        rolled_over = 0;
         __sync_fetch_and_add(&queue->burst_occupancy, packet_size);
-        // we are still in the middle of a burst time slot and thus
-        // can't yet say how much throughput happened in that slot
-        return 0;
+        burst_occupancy = queue->burst_occupancy;
+    } else {
+        // we have rolled over to a new BURST_TIME slot
+        // we can be sure that nobody else tries to reset burst_occupancy
+        // because we have won the compare_and_swap on the timestamp, and we can
+        // guarantee that there is always just one pair of previous / now
+        // timestamps that "crosses a BURST_TIME border" because our time is
+        // monotonic
+        rolled_over = 1;
+        burst_occupancy = __sync_lock_test_and_set(
+            &queue->burst_occupancy, packet_size
+        );
     }
-    // we have rolled over to a new BURST_TIME slot
-    // we can be sure that nobody else tries to reset burst_occupancy because we
-    // have won the compare_and_swap on the timestamp, and we can guarantee that
-    // there is always just one pair of previous / now timestamps that
-    // "crosses a BURST_TIME border" because our time is monotonic
-    __u64 burst_occupancy = __sync_lock_test_and_set(
-        &queue->burst_occupancy, 0
-    );
 
 
     __u64 r_i = queue->rate;
@@ -234,7 +242,8 @@ static __s64 burst_control(
             }
         }
 
-    } else if (burst_occupancy < x_i_minus) {
+    } else if (rolled_over == 1 && burst_occupancy < x_i_minus) {
+        // we only check for "underflow" once a BURST_TIME period is complete
         // remove magic packets
         __u64 magic = queue->magic;
 
