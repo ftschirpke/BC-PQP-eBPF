@@ -160,14 +160,6 @@ struct {
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } xdp_general_map SEC(".maps");
 
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __type(key, __u32);
-    __type(value, __u64);
-    __uint(max_entries, PHANTOM_QUEUES + 1);
-    __uint(pinning, LIBBPF_PIN_BY_NAME);
-} classification_counts SEC(".maps");
-
 static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
     // can be negative if we have a timing issue and someone who has started
     // after us already managed to write to the queue. In that case our drain
@@ -422,24 +414,6 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
 
     __u32 classification, packet_size;
     classify_packet(ctx, &classification, &packet_size);
-    // sanity check for the loader
-    // todo this somehow only works with 8 as upper bound?
-    if (classification >= 0 && classification <= PHANTOM_QUEUES) {
-        __u64* value = (__u64*)bpf_map_lookup_elem(
-            &classification_counts, &classification
-        );
-        if (value != NULL) {
-            log("Classification successful: [%u] = %lu", classification,
-                *value);
-            __sync_fetch_and_add(value, 1);
-        } else {
-            log("Classification unsuccessful");
-            goto abort;
-        }
-    } else {
-        log("Aborting because classification is out of range");
-        goto abort;
-    }
 
     struct phantom_queue* queue = (struct phantom_queue*)bpf_map_lookup_elem(
         &xdp_general_map, &classification
