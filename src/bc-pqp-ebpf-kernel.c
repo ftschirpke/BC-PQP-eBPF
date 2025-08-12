@@ -156,7 +156,7 @@ struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
     __type(value, struct phantom_queue);
-    __uint(max_entries, PHANTOM_QUEUES + 1);
+    __uint(max_entries, PHANTOM_QUEUES);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } xdp_general_map SEC(".maps");
 
@@ -373,12 +373,19 @@ static void classify_packet(
                     break;
                 }
                 default: {
-                    log("Cannot classify packet because of unknown packet "
+                    log("Cannot classify packet because of unknown transport "
                         "protocol: %u",
                         ip_type);
                     goto default_error;
                 }
             }
+            break;
+        }
+        default: {
+            log("Cannot classify packet because of unknown internet "
+                "protocol: %u",
+                eth_type);
+            goto default_error;
         }
     }
     *phantom_queue = port % PHANTOM_QUEUES;
@@ -419,8 +426,8 @@ int bc_pqp_xdp(struct xdp_md* ctx) {
         &xdp_general_map, &classification
     );
     if (queue == NULL) {
-        log("Could not read element %u from map", classification);
-        goto abort;
+        log("Could not classify packet, forwarding to kernel");
+        goto kernel;
     } else {
         if (queue->capacity == 0) {
             // we are first, start timer and initialize capacity
@@ -452,6 +459,8 @@ drop:
     return XDP_DROP;
 pass:
     return bypass_kernel_if_possible(ctx);
+kernel:
+    return XDP_PASS;
 }
 
 char _license[] SEC("license") = "GPL";
