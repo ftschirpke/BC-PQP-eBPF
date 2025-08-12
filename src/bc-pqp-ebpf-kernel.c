@@ -82,14 +82,14 @@ struct {
 } mac_map SEC(".maps");
 
 // bypass kernel networking stack by rewriting the MAC address to eth1
-int bypass_kernel_if_possible(struct xdp_md* ctx) {
+static __u32 bypass_kernel_if_possible(struct xdp_md* ctx) {
     void* data = (void*)(long)ctx->data;
     void* data_end = (void*)(long)ctx->data_end;
     struct hdr_cursor nh;
     nh.pos = data;
 
     struct ethhdr* eth_header;
-    int eth_type = parse_ethhdr(&nh, data_end, &eth_header);
+    __u32 eth_type = (__u32)parse_ethhdr(&nh, data_end, &eth_header);
     eth_type = bpf_ntohs(eth_type);
 
     switch (eth_type) {
@@ -333,7 +333,7 @@ static void classify_packet(
     nh.pos = data;
 
     struct ethhdr* eth;
-    int eth_type = parse_ethhdr(&nh, data_end, &eth);
+    __u32 eth_type = (__u32)parse_ethhdr(&nh, data_end, &eth);
     eth_type = bpf_ntohs(eth_type);
 
     __u32 port = 0;
@@ -422,7 +422,7 @@ static __u32 initialize(struct phantom_queue* queue) {
 }
 
 SEC("xdp")
-int bc_pqp_xdp(struct xdp_md* ctx) {
+__u32 bc_pqp_xdp(struct xdp_md* ctx) {
     log("===== BC-PQP on rx-queue %u =====", ctx->rx_queue_index);
 
     __u32 classification, packet_size;
