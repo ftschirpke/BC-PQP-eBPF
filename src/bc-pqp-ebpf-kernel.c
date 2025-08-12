@@ -58,6 +58,8 @@
 #else
 #define CLASSIFY_BY source
 #endif
+// a poor-mans log_2, calculated by looking at the MSB
+#define ld(x) (64 - (__u32)__builtin_clzll((__u64)x))
 
 enum mac_index {
     MAC_CLIENT,
@@ -162,18 +164,22 @@ struct {
 
 static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
     // can be negative if we have a timing issue and someone who has started
-    // after us already managed to write to the queue. In that case our drain
-    // was already included in their drain, i.e. we don't have to do anything
+    // after us already managed to write to the queue. In that case our
+    // drain was already included in their drain, i.e. we don't have to do
+    // anything
     __s64 timespan = (__s64)(now - previous);
     if (timespan < (__s64)0) {
         return 0;
     }
-    __s64 res = timespan * (__s64)rate;
-    if (res < (__s64)0) {
-        res = INT_MAX;
+
+    // we try detect overflows (in a performant fashion)
+    if (ld(rate) + ld(timespan) <= sizeof(__u64) * 8) {
+        return (rate * (__u64)timespan) / ONE_SECOND;
+    } else {
+        log("overflowing drain detected (timespan: %ld, rate: %lu)", timespan,
+            rate);
+        return (((__u64)timespan) / ONE_SECOND) * rate;
     }
-    // res is now unsigned again since 0 <= res <= MAX_INT
-    return (__u64)res / ONE_SECOND;
 }
 
 /**
