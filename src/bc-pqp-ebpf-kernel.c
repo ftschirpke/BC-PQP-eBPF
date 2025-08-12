@@ -199,11 +199,12 @@ static __s64 burst_control(
     __u64 burst_occupancy;
     // manage burst queue
 
+    __u64 burst_window_offset = (previous % BURST_TIME) + (now - previous);
     // the following is equivalent to
     // 'previous / BURST_TIME == now / BURST_TIME'
     // in the below version we only need one modulo calculation (instead of 2
     // divisions) which should be faster
-    if ((previous % BURST_TIME) + (now - previous) < BURST_TIME) {
+    if (burst_window_offset < BURST_TIME) {
         rolled_over = 0;
         __sync_fetch_and_add(&queue->burst_occupancy, packet_size);
         burst_occupancy = queue->burst_occupancy;
@@ -218,6 +219,12 @@ static __s64 burst_control(
         burst_occupancy = __sync_lock_test_and_set(
             &queue->burst_occupancy, packet_size
         );
+        if (burst_window_offset >= 2 * BURST_TIME) {
+            // we missed at least one BURST_TIME slot (no packet arrived)
+            // therefore the last burst occupancy was actually 0
+            // (and not the previous value as usual)
+            burst_occupancy = 0;
+        }
     }
 
 
