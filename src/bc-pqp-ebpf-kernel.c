@@ -333,7 +333,7 @@ static void classify_packet(
     nh.pos = data;
 
     struct ethhdr* eth;
-    __u32 eth_type = (__u32)parse_ethhdr(&nh, data_end, &eth);
+    __s32 eth_type = parse_ethhdr(&nh, data_end, &eth);
     eth_type = bpf_ntohs(eth_type);
 
     __u32 port = 0;
