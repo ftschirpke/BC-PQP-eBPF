@@ -9,7 +9,7 @@ EBPF_SRC = bc-pqp-ebpf-kernel.c
 RX_QUEUES ?= 4
 PHANTOM_QUEUES ?= 10
 BURST_TIME ?= 10000000L
-RATE ?= GIBIBYTE
+RATE ?= GIBIBIT
 
 SRC_DIR = src
 BUILD_DIR = build
@@ -18,7 +18,7 @@ LLC = llc
 CLANG = clang
 
 C_FLAGS = -O2
-WARN_FLAGS = -Wall -Wno-unused-value -Wno-pointer-sign -Wno-compare-distinct-pointer-types -Wsign-compare -Wsign-conversion -Werror
+WARN_FLAGS = -Wall -Wno-unused-value -Wno-pointer-sign -Wno-compare-distinct-pointer-types -Wsign-compare -Wimplicit-fallthrough -Wsign-conversion -Werror
 
 EBPF_HDR = 
 

@@ -27,6 +27,10 @@
 #define GIBIBYTE (1 << 30)
 #define TEBIBYTE (1 << 40)
 
+#define MEBIBIT (MEBIBYTE >> 3)
+#define GIBIBIT (GIBIBYTE >> 3)
+#define TEBIBIT (TEBIBYTE >> 3)
+
 #define ONE_SECOND 1000000000L // 1s = 1e9 ns
 
 #ifndef BURST_TIME
@@ -34,7 +38,7 @@
 #endif
 
 #ifndef RATE
-#define RATE GIBIBYTE
+#define RATE GIBIBIT
 #endif
 
 #ifdef DEBUG
@@ -58,6 +62,8 @@
 #else
 #define CLASSIFY_BY source
 #endif
+// a poor-mans log_2, calculated by looking at the MSB
+#define ld(x) (64 - (__u32)__builtin_clzll((__u64)x))
 
 enum mac_index {
     MAC_CLIENT,
@@ -80,14 +86,14 @@ struct {
 } mac_map SEC(".maps");
 
 // bypass kernel networking stack by rewriting the MAC address to eth1
-int bypass_kernel_if_possible(struct xdp_md* ctx) {
+static __u32 bypass_kernel_if_possible(struct xdp_md* ctx) {
     void* data = (void*)(long)ctx->data;
     void* data_end = (void*)(long)ctx->data_end;
     struct hdr_cursor nh;
     nh.pos = data;
 
     struct ethhdr* eth_header;
-    int eth_type = parse_ethhdr(&nh, data_end, &eth_header);
+    __s32 eth_type = parse_ethhdr(&nh, data_end, &eth_header);
     eth_type = bpf_ntohs(eth_type);
 
     switch (eth_type) {
@@ -148,38 +154,36 @@ struct phantom_queue {
     __u64 rate;
     // how much of the occupancy is actually magic
     __u64 magic;
+    // counter for burst control
+    __u64 burst_occupancy;
 };
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
     __type(value, struct phantom_queue);
-    __uint(max_entries, PHANTOM_QUEUES + 1);
+    __uint(max_entries, PHANTOM_QUEUES);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } xdp_general_map SEC(".maps");
 
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __type(key, __u32);
-    __type(value, __u64);
-    __uint(max_entries, PHANTOM_QUEUES + 1);
-    __uint(pinning, LIBBPF_PIN_BY_NAME);
-} classification_counts SEC(".maps");
-
 static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
     // can be negative if we have a timing issue and someone who has started
-    // after us already managed to write to the queue. In that case our drain
-    // was already included in their drain, i.e. we don't have to do anything
+    // after us already managed to write to the queue. In that case our
+    // drain was already included in their drain, i.e. we don't have to do
+    // anything
     __s64 timespan = (__s64)(now - previous);
     if (timespan < (__s64)0) {
         return 0;
     }
-    __s64 res = timespan * (__s64)rate;
-    if (res < (__s64)0) {
-        res = INT_MAX;
+
+    // we try detect overflows (in a performant fashion)
+    if (ld(rate) + ld(timespan) <= sizeof(__u64) * 8) {
+        return (rate * (__u64)timespan) / ONE_SECOND;
+    } else {
+        log("overflowing drain detected (timespan: %ld, rate: %lu)", timespan,
+            rate);
+        return (((__u64)timespan) / ONE_SECOND) * rate;
     }
-    // res is now unsigned again since 0 <= res <= MAX_INT
-    return (__u64)res / ONE_SECOND;
 }
 
 /**
@@ -188,11 +192,45 @@ static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
    not yet added to the occupancy.
 */
 static __s64 burst_control(
-    __u32 key, struct phantom_queue* queue, __s64 occupancy, __u64 capacity
+    __u32 key, struct phantom_queue* queue, __u64 previous, __u64 now,
+    __u64 packet_size
 ) {
     // unlike in the paper we assume that all queues are active
     // and that the queue size is proportional to the demand
-    __u64 r_i = capacity;
+    __u8 rolled_over;
+    __u64 burst_occupancy;
+    // manage burst queue
+
+    __u64 burst_window_offset = (previous % BURST_TIME) + (now - previous);
+    // the following is equivalent to
+    // 'previous / BURST_TIME == now / BURST_TIME'
+    // in the below version we only need one modulo calculation (instead of 2
+    // divisions) which should be faster
+    if (burst_window_offset < BURST_TIME) {
+        rolled_over = 0;
+        __sync_fetch_and_add(&queue->burst_occupancy, packet_size);
+        burst_occupancy = queue->burst_occupancy;
+    } else {
+        // we have rolled over to a new BURST_TIME slot
+        // we can be sure that nobody else tries to reset burst_occupancy
+        // because we have won the compare_and_swap on the timestamp, and we can
+        // guarantee that there is always just one pair of previous / now
+        // timestamps that "crosses a BURST_TIME border" because our time is
+        // monotonic
+        rolled_over = 1;
+        burst_occupancy = __sync_lock_test_and_set(
+            &queue->burst_occupancy, packet_size
+        );
+        if (burst_window_offset >= 2 * BURST_TIME) {
+            // we missed at least one BURST_TIME slot (no packet arrived)
+            // therefore the last burst occupancy was actually 0
+            // (and not the previous value as usual)
+            burst_occupancy = 0;
+        }
+    }
+
+
+    __u64 r_i = queue->rate;
     __u64 x_i = r_i * BURST_TIME / ONE_SECOND;
     // calculate thresholds (0.5, 1.5)
     __u64 x_i_half = x_i >> 1;
@@ -200,21 +238,21 @@ static __s64 burst_control(
     x_i_plus += x_i_half;
     x_i_minus -= x_i_half;
 
-    if (occupancy > (__s64)x_i_plus) {
+    if (burst_occupancy > x_i_plus) {
         // fill queue with magic packets
         if (queue->magic == 0) {
-            // because occupancy passed the (signed) comparison above, it must
-            // now be >= 0 since capacity must be >= 0 and thus also x_i_plus
-            __u64 magic = capacity - (__u64)occupancy;
+            __u64 magic = queue->capacity - (__u64)queue->occupancy;
             __u64 res = __sync_val_compare_and_swap(&queue->magic, 0, magic);
             if (res == 0) {
-                log("should add %lu magic bytes to queue %d with occupancy %ld",
-                    magic, key, occupancy);
+                log("should add %lu magic bytes to queue %d with burst "
+                    "occupancy %lu",
+                    magic, key, burst_occupancy);
                 return (__s64)magic;
             }
         }
 
-    } else if (occupancy < (__s64)x_i_minus) {
+    } else if (rolled_over == 1 && burst_occupancy < x_i_minus) {
+        // we only check for "underflow" once a BURST_TIME period is complete
         // remove magic packets
         __u64 magic = queue->magic;
 
@@ -222,9 +260,9 @@ static __s64 burst_control(
             // only drain magic packets if there are any
             __u64 res = __sync_val_compare_and_swap(&queue->magic, magic, 0);
             if (res == magic) {
-                log("should subtract %ld magic bytes from queue %d with "
-                    "occupancy %ld",
-                    magic, key, occupancy);
+                log("should subtract %ld magic bytes from queue %d with burst "
+                    "occupancy %lu",
+                    magic, key, burst_occupancy);
                 return (__s64)-magic;
             }
         }
@@ -243,13 +281,14 @@ static __u64 try_increment_counter(
     __u64 drain = calculate_drain(now, previous, rate);
 
     __s64 diff = 0;
-    __u64 prev = __sync_val_compare_and_swap(&queue->time, previous, now);
 
-    if (prev == previous) {
+    if (previous < now
+        && __sync_val_compare_and_swap(&queue->time, previous, now)
+               == previous) {
         // race won, we get to add the drain + magic
         // todo we have already reat occupancy etc. but we change it in
         // burst_control
-        __s64 magic = burst_control(key, queue, occupancy, capacity);
+        __s64 magic = burst_control(key, queue, previous, now, packet_size);
         diff += magic;
         diff -= drain;
     }
@@ -298,7 +337,7 @@ static void classify_packet(
     nh.pos = data;
 
     struct ethhdr* eth;
-    int eth_type = parse_ethhdr(&nh, data_end, &eth);
+    __s32 eth_type = parse_ethhdr(&nh, data_end, &eth);
     eth_type = bpf_ntohs(eth_type);
 
     __u32 port = 0;
@@ -344,12 +383,19 @@ static void classify_packet(
                     break;
                 }
                 default: {
-                    log("Cannot classify packet because of unknown packet "
+                    log("Cannot classify packet because of unknown transport "
                         "protocol: %u",
                         ip_type);
                     goto default_error;
                 }
             }
+            break;
+        }
+        default: {
+            log("Cannot classify packet because of unknown internet "
+                "protocol: %u",
+                eth_type);
+            goto default_error;
         }
     }
     *phantom_queue = port % PHANTOM_QUEUES;
@@ -380,36 +426,18 @@ static __u32 initialize(struct phantom_queue* queue) {
 }
 
 SEC("xdp")
-int bc_pqp_xdp(struct xdp_md* ctx) {
+__u32 bc_pqp_xdp(struct xdp_md* ctx) {
     log("===== BC-PQP on rx-queue %u =====", ctx->rx_queue_index);
 
     __u32 classification, packet_size;
     classify_packet(ctx, &classification, &packet_size);
-    // sanity check for the loader
-    // todo this somehow only works with 8 as upper bound?
-    if (classification >= 0 && classification <= PHANTOM_QUEUES) {
-        __u64* value = (__u64*)bpf_map_lookup_elem(
-            &classification_counts, &classification
-        );
-        if (value != NULL) {
-            log("Classification successful: [%u] = %lu", classification,
-                *value);
-            __sync_fetch_and_add(value, 1);
-        } else {
-            log("Classification unsuccessful");
-            goto abort;
-        }
-    } else {
-        log("Aborting because classification is out of range");
-        goto abort;
-    }
 
     struct phantom_queue* queue = (struct phantom_queue*)bpf_map_lookup_elem(
         &xdp_general_map, &classification
     );
     if (queue == NULL) {
-        log("Could not read element %u from map", classification);
-        goto abort;
+        log("Could not classify packet, forwarding to kernel");
+        goto kernel;
     } else {
         if (queue->capacity == 0) {
             // we are first, start timer and initialize capacity
@@ -441,6 +469,8 @@ drop:
     return XDP_DROP;
 pass:
     return bypass_kernel_if_possible(ctx);
+kernel:
+    return XDP_PASS;
 }
 
 char _license[] SEC("license") = "GPL";
