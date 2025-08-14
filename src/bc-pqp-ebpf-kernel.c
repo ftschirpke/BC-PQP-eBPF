@@ -117,19 +117,16 @@ static __u32 bypass_kernel_if_possible(struct xdp_md* ctx) {
     __s32 eth_type = parse_ethhdr(&nh, data_end, &eth_header);
     eth_type = bpf_ntohs(eth_type);
 
-    switch (eth_type) {
-        case ETH_P_IP:
-            break;
-        default:
-            log("We are passing the packet to the kernel.");
-            return XDP_PASS;
+    if (unlikely(eth_type != ETH_P_IP)) {
+        log("We are passing the packet to the kernel.");
+        return XDP_PASS;
     }
 
     __u32 server_key = MAC_SERVER;
     __u64* next_hop_mac_ptr = (__u64*)bpf_map_lookup_elem(
         &mac_map, &server_key
     );
-    if (next_hop_mac_ptr == NULL) {
+    if (unlikely(next_hop_mac_ptr == NULL)) {
         log("Could not find next hop MAC address", 36);
         return XDP_PASS;
     }
@@ -145,7 +142,7 @@ static __u32 bypass_kernel_if_possible(struct xdp_md* ctx) {
 
     __u32 egress_key = MAC_VM_EGRESS;
     __u64* egress_mac_ptr = (__u64*)bpf_map_lookup_elem(&mac_map, &egress_key);
-    if (egress_mac_ptr == NULL) {
+    if (unlikely(egress_mac_ptr == NULL)) {
         log("Could not find egress MAC address", 34);
         return XDP_PASS;
     }
@@ -302,12 +299,12 @@ static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
     // drain was already included in their drain, i.e. we don't have to do
     // anything
     __s64 timespan = (__s64)(now - previous);
-    if (timespan < (__s64)0) {
+    if (unlikely(timespan < (__s64)0)) {
         return 0;
     }
 
     // we try detect overflows (in a performant fashion)
-    if (ld(rate) + ld(timespan) <= sizeof(__u64) * 8) {
+    if (unlikely(ld(rate) + ld(timespan) <= sizeof(__u64) * 8)) {
         return (rate * (__u64)timespan) / ONE_SECOND;
     } else {
         log("overflowing drain detected (timespan: %ld, rate: %lu)", timespan,
@@ -470,7 +467,7 @@ static void classify_packet(
             header_size += sizeof(struct iphdr);
             struct iphdr* ip_header;
             __s32 ip_parse_result = parse_iphdr(&nh, data_end, &ip_header);
-            if (ip_parse_result == -1) {
+            if (unlikely(ip_parse_result == -1)) {
                 log("Cannot classify packet because IP parsing failed");
                 goto default_error;
             }
@@ -481,7 +478,7 @@ static void classify_packet(
                     __s32 tcp_header_size = parse_tcphdr(
                         &nh, data_end, &tcp_header
                     );
-                    if (tcp_header_size == -1) {
+                    if (unlikely(tcp_header_size == -1)) {
                         log(
                             "Cannot classify packet because TCP parsing failed"
                         );
@@ -496,7 +493,7 @@ static void classify_packet(
                     __s32 udp_header_size = parse_udphdr(
                         &nh, data_end, &udp_header
                     );
-                    if (udp_header_size == -1) {
+                    if (unlikely(udp_header_size == -1)) {
                         log(
                             "Cannot classify packet because UDP parsing failed"
                         );
@@ -525,7 +522,7 @@ static void classify_packet(
     *phantom_queue = port % PHANTOM_QUEUES;
     *packet_size = data_end - data;
 #ifdef STRIP_HEADERS
-    if (header_size < *packet_size) {
+    if (likely(header_size < *packet_size)) {
         *packet_size -= header_size;
     } else {
         log("Cannot classify packet because parsed header is larger than parse "
