@@ -41,7 +41,11 @@
 #define ONE_SECOND 1000000000L // 1s = 1e9 ns
 
 #ifndef BURST_TIME
-#define BURST_TIME 100000000L
+#define BURST_TIME 10000000L
+#endif
+
+#ifdef BITRATE
+#define RATE (BITRATE >> 3)
 #endif
 
 #ifndef CALLBACK_TIME
@@ -74,7 +78,17 @@
 #define unlikely(x) (__builtin_expect(!!(x), 0))
 #endif
 
+#ifndef EGRESS_INTERFACE
 #define EGRESS_INTERFACE 3
+#endif
+
+#ifndef EGRESS_MAC
+#define EGRESS_MAC 0xaabbccddeeff
+#endif
+
+#ifndef NEXT_HOP_MAC 
+#define NEXT_HOP_MAC 0xaabbccddeeff
+#endif
 
 #ifdef CLASSIFY_BY_DESTINATION
 #define CLASSIFY_BY dest
@@ -132,41 +146,25 @@ static __u32 bypass_kernel_if_possible(struct xdp_md* ctx) {
         return XDP_PASS;
     }
 
-    __u32 server_key = MAC_SERVER;
-    __u64* next_hop_mac_ptr = (__u64*)bpf_map_lookup_elem(
-        &mac_map, &server_key
-    );
-    if (unlikely(next_hop_mac_ptr == NULL)) {
-        log("Could not find next hop MAC address", 36);
-        return XDP_PASS;
-    }
-    __u64 next_hop_mac = *next_hop_mac_ptr;
     __u8 new_dest[6] = {
-        (__u8)((next_hop_mac >> 0) & 0xff),
-        (__u8)((next_hop_mac >> 8) & 0xff),
-        (__u8)((next_hop_mac >> 16) & 0xff),
-        (__u8)((next_hop_mac >> 24) & 0xff),
-        (__u8)((next_hop_mac >> 32) & 0xff),
-        (__u8)((next_hop_mac >> 40) & 0xff),
+        (__u8)((NEXT_HOP_MAC >> 40) & 0xff),
+        (__u8)((NEXT_HOP_MAC >> 32) & 0xff),
+        (__u8)((NEXT_HOP_MAC >> 24) & 0xff),
+        (__u8)((NEXT_HOP_MAC >> 16) & 0xff),
+        (__u8)((NEXT_HOP_MAC >> 8) & 0xff),
+        (__u8)((NEXT_HOP_MAC >> 0) & 0xff),
     };
 
-    __u32 egress_key = MAC_VM_EGRESS;
-    __u64* egress_mac_ptr = (__u64*)bpf_map_lookup_elem(&mac_map, &egress_key);
-    if (unlikely(egress_mac_ptr == NULL)) {
-        log("Could not find egress MAC address", 34);
-        return XDP_PASS;
-    }
-    __u64 egress_mac = *egress_mac_ptr;
     __u8 new_src[6] = {
-        (__u8)((egress_mac >> 0) & 0xff),  (__u8)((egress_mac >> 8) & 0xff),
-        (__u8)((egress_mac >> 16) & 0xff), (__u8)((egress_mac >> 24) & 0xff),
-        (__u8)((egress_mac >> 32) & 0xff), (__u8)((egress_mac >> 40) & 0xff),
+        (__u8)((EGRESS_MAC >> 40) & 0xff),  (__u8)((EGRESS_MAC >> 32) & 0xff),
+        (__u8)((EGRESS_MAC >> 24) & 0xff), (__u8)((EGRESS_MAC >> 16) & 0xff),
+        (__u8)((EGRESS_MAC >> 8) & 0xff), (__u8)((EGRESS_MAC >> 0) & 0xff),
     };
 
     __builtin_memcpy(eth_header->h_dest, new_dest, ETH_ALEN);
     __builtin_memcpy(eth_header->h_source, new_src, ETH_ALEN);
-    log("Kernel Bypass: Redirecting packet %lx -> %lx", 45, egress_mac,
-        next_hop_mac);
+    log("Kernel Bypass: Redirecting packet %lx -> %lx", 45, EGRESS_MAC,
+        NEXT_HOP_MAC);
 
     return bpf_redirect(EGRESS_INTERFACE, 0);
 }
