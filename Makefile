@@ -9,7 +9,7 @@ EBPF_SRC = bc-pqp-ebpf-kernel.c
 RX_QUEUES ?= 4
 PHANTOM_QUEUES ?= 10
 BURST_TIME ?= 10000000L
-RATE ?= GIBIBYTE
+RATE ?= GIBIBIT
 
 SRC_DIR = src
 BUILD_DIR = build

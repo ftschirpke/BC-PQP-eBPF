@@ -27,6 +27,10 @@
 #define GIBIBYTE (1 << 30)
 #define TEBIBYTE (1 << 40)
 
+#define MEBIBIT (MEBIBYTE >> 3)
+#define GIBIBIT (GIBIBYTE >> 3)
+#define TEBIBIT (TEBIBYTE >> 3)
+
 #define ONE_SECOND 1000000000L // 1s = 1e9 ns
 
 #ifndef BURST_TIME
@@ -34,7 +38,7 @@
 #endif
 
 #ifndef RATE
-#define RATE GIBIBYTE
+#define RATE GIBIBIT
 #endif
 
 #ifdef DEBUG
