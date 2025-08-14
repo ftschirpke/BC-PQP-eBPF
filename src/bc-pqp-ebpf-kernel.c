@@ -15,6 +15,13 @@
 
 #define PARSING_ERROR -1
 
+// flags allowed in bpf_timer_init, see also
+// - https://github.com/tpapagian/go-ebpf-timer/blob/main/fentry.c
+// - https://docs.ebpf.io/linux/concepts/timers/
+#define CLOCK_REALTIME 0
+#define CLOCK_MONOTONIC 1
+#define CLOCK_BOOTTIME 7
+
 #ifndef RX_QUEUES
 #define RX_QUEUES 4
 #endif
@@ -37,6 +44,10 @@
 #define BURST_TIME 100000000L
 #endif
 
+#ifndef CALLBACK_TIME
+#define CALLBACK_TIME 100000000L
+#endif
+
 #ifndef RATE
 #define RATE GIBIBIT
 #endif
@@ -50,6 +61,17 @@
 #define log(...)                                                               \
     do {                                                                       \
     } while (0)
+#endif
+
+// likely/unlikely macros have been added in bpf_helpers v1.6.0
+// https://github.com/libbpf/libbpf/commit/7a1388d55faa47d80be19a4b050ca58d2343cc0a
+// (we don't have that version yet)
+#ifndef likely
+#define likely(x) (__builtin_expect(!!(x), 1))
+#endif
+
+#ifndef unlikely
+#define unlikely(x) (__builtin_expect(!!(x), 0))
 #endif
 
 #define EGRESS_INTERFACE 3
@@ -142,7 +164,7 @@ static __u32 bypass_kernel_if_possible(struct xdp_md* ctx) {
     return bpf_redirect(EGRESS_INTERFACE, 0);
 }
 
-struct phantom_queue {
+struct local_phantom_queue {
     // how many bytes are currently in this queue
     __s64 occupancy;
     // how many bytes fit in this queue
@@ -155,15 +177,124 @@ struct phantom_queue {
     __u64 magic;
     // counter for burst control
     __u64 burst_occupancy;
+    // how much bytes wanted to get through this queue (passed & aborted)
+    __u64 throughput;
+};
+
+struct global_phantom_queue {
+    __u64 capacity;
+    __u64 rate;
+    __u64 rx_queue_throughput[RX_QUEUES];
+};
+
+struct local_queues {
+    struct local_phantom_queue queues[PHANTOM_QUEUES];
+} __attribute__((aligned(64)));
+
+struct global_queues {
+    __u64 initialized;
+    struct bpf_timer timer;
+    struct global_phantom_queue queues[PHANTOM_QUEUES];
 };
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
-    __type(value, struct phantom_queue);
-    __uint(max_entries, PHANTOM_QUEUES);
+    __type(value, struct local_queues);
+    __uint(max_entries, RX_QUEUES);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } xdp_general_map SEC(".maps");
+
+struct {
+    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __type(key, __u32);
+    __type(value, struct global_queues);
+    __uint(max_entries, 1);
+    __uint(pinning, LIBBPF_PIN_BY_NAME);
+} global_queues_map SEC(".maps");
+
+static __u32 timer_callback(
+    void* map, __u32* key, struct global_queues* globals
+) {
+    __u64 aggregate_throughput[PHANTOM_QUEUES] = {0};
+    __u32 rx_queue, rx_queue_key, ph_queue;
+    // get all current throughput measurements and aggregate them
+
+    bpf_for(rx_queue, 0, RX_QUEUES) {
+        // this is a small trick to make the verifier happy
+        // we need to pass a reference of rx_queue to bpf_map_lookup_elem, which
+        // will reset all assertions the verifier has about this variable (i.e.
+        // bounds). We use a single-use copy to circumvent problems.
+        rx_queue_key = rx_queue;
+        struct local_queues* lq = (struct local_queues*)bpf_map_lookup_elem(
+            &xdp_general_map, &rx_queue_key
+        );
+        if (unlikely(lq == NULL)) {
+            log("failed to read from local_queues index %u", rx_queue_key);
+            goto reset_timer;
+        }
+        bpf_for(ph_queue, 0, PHANTOM_QUEUES) {
+            __u64 curr_tp = lq->queues[ph_queue].throughput;
+            __u64 prev_tp = globals->queues[ph_queue]
+                                .rx_queue_throughput[rx_queue];
+            // reset local throughput counter
+            // (1 to avoid division by 0 problems)
+            __sync_lock_test_and_set(&lq->queues[ph_queue].throughput, 1);
+            // update global moving average
+            __u64 avg = (prev_tp + curr_tp) / 2;
+            log("throughput in queue (ph: %u, rx: %u) is (curr: %lu, prev: "
+                "%lu, new: %lu)",
+                ph_queue, rx_queue, curr_tp, prev_tp, avg);
+            globals->queues[ph_queue].rx_queue_throughput[rx_queue] = avg;
+            // save per-phantom-queue average
+            aggregate_throughput[ph_queue] += avg;
+        }
+    }
+
+    // calculate updated capacity & rate values and set them in the local queues
+
+    bpf_for(rx_queue, 0, RX_QUEUES) {
+        rx_queue_key = rx_queue;
+        struct local_queues* lq = (struct local_queues*)bpf_map_lookup_elem(
+            &xdp_general_map, &rx_queue_key
+        );
+        if (unlikely(lq == NULL)) {
+            log("failed to read from local_queues index %u", rx_queue_key);
+            goto reset_timer;
+        }
+        bpf_for(ph_queue, 0, PHANTOM_QUEUES) {
+            struct local_phantom_queue* lpq = &lq->queues[ph_queue];
+            __u64 local_throughput = globals->queues[ph_queue]
+                                         .rx_queue_throughput[rx_queue];
+            __u64 agg_throughput = aggregate_throughput[ph_queue];
+            __u64 global_capacity = globals->queues[ph_queue].capacity;
+            __u64 global_rate = globals->queues[ph_queue].rate;
+            __u64 local_capacity = (local_throughput * global_capacity)
+                                   / agg_throughput;
+            __u64 local_rate = (local_throughput * global_rate)
+                               / agg_throughput;
+            log("update queue: (agg: %lu, local tp: %lu, global cap: %lu, "
+                "global rate: %lu)",
+                agg_throughput, local_throughput, global_capacity, global_rate);
+            log("update queue (ph: %u, rx: %u) capacity (old: %lu, new: %lu) "
+                "and rate (old: %lu, new: %lu)",
+                ph_queue, rx_queue, lpq->capacity, local_capacity, lpq->rate,
+                local_rate);
+            __sync_lock_test_and_set(&lpq->capacity, local_capacity);
+            __sync_lock_test_and_set(&lpq->rate, local_rate);
+        }
+    }
+
+// reset the timer
+reset_timer:
+    log("resetting timer");
+    __u32 res = bpf_timer_start(&globals->timer, CALLBACK_TIME, 0);
+    if (unlikely(res)) {
+        log("error: could not reset timer in callback %ld", res);
+        return 0;
+    }
+    return 0;
+}
 
 static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
     // can be negative if we have a timing issue and someone who has started
@@ -191,7 +322,7 @@ static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
    not yet added to the occupancy.
 */
 static __s64 burst_control(
-    __u32 key, struct phantom_queue* queue, __u64 previous, __u64 now,
+    __u32 key, struct local_phantom_queue* queue, __u64 previous, __u64 now,
     __u64 packet_size
 ) {
     // unlike in the paper we assume that all queues are active
@@ -205,9 +336,9 @@ static __s64 burst_control(
     // 'previous / BURST_TIME == now / BURST_TIME'
     // in the below version we only need one modulo calculation (instead of 2
     // divisions) which should be faster
-    if (burst_window_offset < BURST_TIME) {
+    if (likely(burst_window_offset < BURST_TIME)) {
         rolled_over = 0;
-        __sync_fetch_and_add(&queue->burst_occupancy, packet_size);
+        queue->burst_occupancy += packet_size;
         burst_occupancy = queue->burst_occupancy;
     } else {
         // we have rolled over to a new BURST_TIME slot
@@ -217,10 +348,9 @@ static __s64 burst_control(
         // timestamps that "crosses a BURST_TIME border" because our time is
         // monotonic
         rolled_over = 1;
-        burst_occupancy = __sync_lock_test_and_set(
-            &queue->burst_occupancy, packet_size
-        );
-        if (burst_window_offset >= 2 * BURST_TIME) {
+        burst_occupancy = queue->burst_occupancy;
+        queue->burst_occupancy += packet_size;
+        if (unlikely(burst_window_offset >= 2 * BURST_TIME)) {
             // we missed at least one BURST_TIME slot (no packet arrived)
             // therefore the last burst occupancy was actually 0
             // (and not the previous value as usual)
@@ -241,13 +371,11 @@ static __s64 burst_control(
         // fill queue with magic packets
         if (queue->magic == 0) {
             __u64 magic = queue->capacity - (__u64)queue->occupancy;
-            __u64 res = __sync_val_compare_and_swap(&queue->magic, 0, magic);
-            if (res == 0) {
-                log("should add %lu magic bytes to queue %d with burst "
-                    "occupancy %lu",
-                    magic, key, burst_occupancy);
-                return (__s64)magic;
-            }
+            queue->magic = magic;
+            log("should add %lu magic bytes to queue %d with burst "
+                "occupancy %lu",
+                magic, key, burst_occupancy);
+            return (__s64)magic;
         }
 
     } else if (rolled_over == 1 && burst_occupancy < x_i_minus) {
@@ -257,21 +385,23 @@ static __s64 burst_control(
 
         if (magic != 0) {
             // only drain magic packets if there are any
-            __u64 res = __sync_val_compare_and_swap(&queue->magic, magic, 0);
-            if (res == magic) {
-                log("should subtract %ld magic bytes from queue %d with burst "
-                    "occupancy %lu",
-                    magic, key, burst_occupancy);
-                return (__s64)-magic;
-            }
+            queue->magic = 0;
+            log("should subtract %ld magic bytes from queue %d with burst "
+                "occupancy %lu",
+                magic, key, burst_occupancy);
+            return (__s64)-magic;
         }
     }
     return 0;
 }
 
 static __u64 try_increment_counter(
-    __u32 key, struct phantom_queue* queue, __u64 packet_size
+    __u32 key, struct local_phantom_queue* queue, __u64 packet_size
 ) {
+    // always count throughput, no matter whether we pass/drop this packet
+    // since we reset this from the timer we have to use an atomic
+    __sync_fetch_and_add(&queue->throughput, packet_size);
+
     __u64 now = bpf_ktime_get_ns();
     __u64 previous = queue->time;
     __u64 rate = queue->rate;
@@ -281,16 +411,11 @@ static __u64 try_increment_counter(
 
     __s64 diff = 0;
 
-    if (previous < now
-        && __sync_val_compare_and_swap(&queue->time, previous, now)
-               == previous) {
-        // race won, we get to add the drain + magic
-        // todo we have already reat occupancy etc. but we change it in
-        // burst_control
-        __s64 magic = burst_control(key, queue, previous, now, packet_size);
-        diff += magic;
-        diff -= drain;
-    }
+    queue->time = now;
+    __s64 magic = burst_control(key, queue, previous, now, packet_size);
+    diff += magic;
+    diff -= drain;
+
 
     __u64 rv;
 
@@ -306,7 +431,7 @@ static __u64 try_increment_counter(
     // check lower bound (we only want to deplete the queue until zero)
     if (occupancy + diff >= 0) {
         // we are positive, i.e. the normal case (add everything)
-        __sync_fetch_and_add(&queue->occupancy, diff);
+        queue->occupancy += diff;
     } else {
         // we either
         // 1. don't have enough tokens left so instead of adding the whole large
@@ -314,7 +439,7 @@ static __u64 try_increment_counter(
         // 2. somehow ended up with a negative occupancy, most likely we
         // "overshot" at some point when multiple threads depleted the queue
         // simultaneously (or there was a bug)
-        __sync_fetch_and_sub(&queue->occupancy, occupancy);
+        queue->occupancy -= occupancy;
     }
 
     log("occ: %li, pkt: %lu", occupancy, packet_size);
@@ -417,49 +542,121 @@ default_error:
     return;
 }
 
-static __u32 initialize(struct phantom_queue* queue) {
-    // capacity was already set
-    queue->rate = RATE;
-    queue->time = bpf_ktime_get_ns();
+static __u32 initialize(struct global_queues* globals) {
+    // initialize global structures
+    // we use __sync_lock_test_and_set to make sure those changes are immediatly
+    // written to main memory and not cached. Since we wait for initialization
+    // to complete before accessing the maps, other threads should never see the
+    // uninitialized structures.
+
+    __u32 rx_queue, ph_queue;
+    bpf_for(ph_queue, 0, PHANTOM_QUEUES) {
+        __sync_lock_test_and_set(&(globals->queues[ph_queue].capacity), RATE);
+        __sync_lock_test_and_set(&(globals->queues[ph_queue].rate), RATE);
+        bpf_for(rx_queue, 0, RX_QUEUES) {
+            __sync_lock_test_and_set(
+                &(globals->queues[ph_queue].rx_queue_throughput[rx_queue]), 1
+            );
+        }
+    }
+
+    // initialize local structures
+    __u64 time = bpf_ktime_get_ns();
+    bpf_for(rx_queue, 0, RX_QUEUES) {
+        struct local_queues* locals = (struct local_queues*)bpf_map_lookup_elem(
+            &xdp_general_map, &rx_queue
+        );
+        if (unlikely(locals == NULL)) {
+            // make verifier happy
+            log("could not read from local_queues map index %u", rx_queue);
+            return 0;
+        }
+        bpf_for(ph_queue, 0, PHANTOM_QUEUES) {
+            __sync_lock_test_and_set(
+                &(locals->queues[ph_queue].capacity), RATE / RX_QUEUES
+            );
+            __sync_lock_test_and_set(
+                &(locals->queues[ph_queue].rate), RATE / RX_QUEUES
+            );
+            __sync_lock_test_and_set(&(locals->queues[ph_queue].time), time);
+            __sync_lock_test_and_set(&(locals->queues[ph_queue].throughput), 1);
+        }
+    }
+
+    // initialize timer
+    __u32 res = bpf_timer_init(
+        &globals->timer, &global_queues_map, CLOCK_MONOTONIC
+    );
+    if (unlikely(res)) {
+        log("error: could not initialize timer: %ld", res);
+        return 1;
+    }
+    res = bpf_timer_set_callback(&globals->timer, timer_callback);
+    if (unlikely(res)) {
+        log("error: could not set timer callback: %ld", res);
+        return 1;
+    }
+    res = bpf_timer_start(&globals->timer, CALLBACK_TIME, 0);
+    if (unlikely(res)) {
+        log("error: could not start timer: %ld", res);
+        return 1;
+    }
+    __sync_lock_test_and_set(&globals->initialized, 2);
+    log("global initialization done (data initialized and timer scheduled)");
     return 0;
 }
 
 SEC("xdp")
 __u32 bc_pqp_xdp(struct xdp_md* ctx) {
-    log("===== BC-PQP on rx-queue %u =====", ctx->rx_queue_index);
+    __u32 rx_index = ctx->rx_queue_index;
+    log("===== BC-PQP on rx-queue %u =====", rx_index);
 
-    __u32 classification, packet_size;
-    classify_packet(ctx, &classification, &packet_size);
-
-    struct phantom_queue* queue = (struct phantom_queue*)bpf_map_lookup_elem(
-        &xdp_general_map, &classification
+    __u32 zero = 0;
+    struct global_queues* globals = (struct global_queues*)bpf_map_lookup_elem(
+        &global_queues_map, &zero
     );
-    if (queue == NULL) {
-        log("Could not classify packet, forwarding to kernel");
-        goto kernel;
-    } else {
-        if (queue->capacity == 0) {
-            // we are first, start timer and initialize capacity
-            __u32 res = __sync_val_compare_and_swap(&queue->capacity, 0, RATE);
-            if (!res) {
-                // race won, we can initialize our queue
-                res = initialize(queue);
-                if (res) {
-                    log("failed to initialize queue %u", classification);
-                    goto abort;
-                }
+    if (likely(globals != NULL)) {
+        if (likely(globals->initialized == 2)) {
+            // everything is already initialized
+        } else {
+            // try to initialize
+            if (!__sync_val_compare_and_swap(&globals->initialized, 0, 1)) {
+                initialize(globals);
+            } else {
+                // someone else is initializing, just pass in the meantime
+                goto pass;
             }
         }
-
-        __u64 result = try_increment_counter(
-            classification, queue, packet_size
-        );
-        if (!result) {
-            goto pass;
-        } else {
-            goto drop;
-        }
+    } else {
+        log("failed to get global timer");
+        goto abort;
     }
+
+    struct local_queues* queues = (struct local_queues*)bpf_map_lookup_elem(
+        &xdp_general_map, &rx_index
+    );
+
+    if (likely(queues != NULL)) {
+        __u32 classification, packet_size;
+        classify_packet(ctx, &classification, &packet_size);
+        if (likely(classification < PHANTOM_QUEUES)) {
+            __u64 result = try_increment_counter(
+                classification, &(queues->queues[classification]), packet_size
+            );
+            if (!result) {
+                goto pass;
+            } else {
+                goto drop;
+            }
+        } else {
+            // unknown classification, let the kernel deal with it
+            goto kernel;
+        }
+    } else {
+        log("Could not read element %u from local queues map", rx_index);
+        goto abort;
+    }
+
 abort:
     log("We are aborting");
     return XDP_ABORTED;
