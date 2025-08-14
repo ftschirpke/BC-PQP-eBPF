@@ -27,6 +27,10 @@
 #define GIBIBYTE (1 << 30)
 #define TEBIBYTE (1 << 40)
 
+#define MEBIBIT (MEBIBYTE >> 3)
+#define GIBIBIT (GIBIBYTE >> 3)
+#define TEBIBIT (TEBIBYTE >> 3)
+
 #define ONE_SECOND 1000000000L // 1s = 1e9 ns
 
 #ifndef BURST_TIME
@@ -34,7 +38,7 @@
 #endif
 
 #ifndef RATE
-#define RATE GIBIBYTE
+#define RATE GIBIBIT
 #endif
 
 #ifdef DEBUG
@@ -58,6 +62,8 @@
 #else
 #define CLASSIFY_BY source
 #endif
+// a poor-mans log_2, calculated by looking at the MSB
+#define ld(x) (64 - (__u32)__builtin_clzll((__u64)x))
 
 enum mac_index {
     MAC_CLIENT,
@@ -80,14 +86,14 @@ struct {
 } mac_map SEC(".maps");
 
 // bypass kernel networking stack by rewriting the MAC address to eth1
-int bypass_kernel_if_possible(struct xdp_md* ctx) {
+static __u32 bypass_kernel_if_possible(struct xdp_md* ctx) {
     void* data = (void*)(long)ctx->data;
     void* data_end = (void*)(long)ctx->data_end;
     struct hdr_cursor nh;
     nh.pos = data;
 
     struct ethhdr* eth_header;
-    int eth_type = parse_ethhdr(&nh, data_end, &eth_header);
+    __s32 eth_type = parse_ethhdr(&nh, data_end, &eth_header);
     eth_type = bpf_ntohs(eth_type);
 
     switch (eth_type) {
@@ -156,32 +162,28 @@ struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
     __type(key, __u32);
     __type(value, struct phantom_queue);
-    __uint(max_entries, PHANTOM_QUEUES + 1);
+    __uint(max_entries, PHANTOM_QUEUES);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } xdp_general_map SEC(".maps");
 
-struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
-    __type(key, __u32);
-    __type(value, __u64);
-    __uint(max_entries, PHANTOM_QUEUES + 1);
-    __uint(pinning, LIBBPF_PIN_BY_NAME);
-} classification_counts SEC(".maps");
-
 static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
     // can be negative if we have a timing issue and someone who has started
-    // after us already managed to write to the queue. In that case our drain
-    // was already included in their drain, i.e. we don't have to do anything
+    // after us already managed to write to the queue. In that case our
+    // drain was already included in their drain, i.e. we don't have to do
+    // anything
     __s64 timespan = (__s64)(now - previous);
     if (timespan < (__s64)0) {
         return 0;
     }
-    __s64 res = timespan * (__s64)rate;
-    if (res < (__s64)0) {
-        res = INT_MAX;
+
+    // we try detect overflows (in a performant fashion)
+    if (ld(rate) + ld(timespan) <= sizeof(__u64) * 8) {
+        return (rate * (__u64)timespan) / ONE_SECOND;
+    } else {
+        log("overflowing drain detected (timespan: %ld, rate: %lu)", timespan,
+            rate);
+        return (((__u64)timespan) / ONE_SECOND) * rate;
     }
-    // res is now unsigned again since 0 <= res <= MAX_INT
-    return (__u64)res / ONE_SECOND;
 }
 
 /**
@@ -335,7 +337,7 @@ static void classify_packet(
     nh.pos = data;
 
     struct ethhdr* eth;
-    int eth_type = parse_ethhdr(&nh, data_end, &eth);
+    __s32 eth_type = parse_ethhdr(&nh, data_end, &eth);
     eth_type = bpf_ntohs(eth_type);
 
     __u32 port = 0;
@@ -381,12 +383,19 @@ static void classify_packet(
                     break;
                 }
                 default: {
-                    log("Cannot classify packet because of unknown packet "
+                    log("Cannot classify packet because of unknown transport "
                         "protocol: %u",
                         ip_type);
                     goto default_error;
                 }
             }
+            break;
+        }
+        default: {
+            log("Cannot classify packet because of unknown internet "
+                "protocol: %u",
+                eth_type);
+            goto default_error;
         }
     }
     *phantom_queue = port % PHANTOM_QUEUES;
@@ -417,36 +426,18 @@ static __u32 initialize(struct phantom_queue* queue) {
 }
 
 SEC("xdp")
-int bc_pqp_xdp(struct xdp_md* ctx) {
+__u32 bc_pqp_xdp(struct xdp_md* ctx) {
     log("===== BC-PQP on rx-queue %u =====", ctx->rx_queue_index);
 
     __u32 classification, packet_size;
     classify_packet(ctx, &classification, &packet_size);
-    // sanity check for the loader
-    // todo this somehow only works with 8 as upper bound?
-    if (classification >= 0 && classification <= PHANTOM_QUEUES) {
-        __u64* value = (__u64*)bpf_map_lookup_elem(
-            &classification_counts, &classification
-        );
-        if (value != NULL) {
-            log("Classification successful: [%u] = %lu", classification,
-                *value);
-            __sync_fetch_and_add(value, 1);
-        } else {
-            log("Classification unsuccessful");
-            goto abort;
-        }
-    } else {
-        log("Aborting because classification is out of range");
-        goto abort;
-    }
 
     struct phantom_queue* queue = (struct phantom_queue*)bpf_map_lookup_elem(
         &xdp_general_map, &classification
     );
     if (queue == NULL) {
-        log("Could not read element %u from map", classification);
-        goto abort;
+        log("Could not classify packet, forwarding to kernel");
+        goto kernel;
     } else {
         if (queue->capacity == 0) {
             // we are first, start timer and initialize capacity
@@ -478,6 +469,8 @@ drop:
     return XDP_DROP;
 pass:
     return bypass_kernel_if_possible(ctx);
+kernel:
+    return XDP_PASS;
 }
 
 char _license[] SEC("license") = "GPL";
