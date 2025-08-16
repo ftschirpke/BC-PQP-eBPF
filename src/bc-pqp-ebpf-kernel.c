@@ -168,14 +168,16 @@ struct local_phantom_queue {
     __u64 capacity;
     // timestamp of the packet that was sent last
     __u64 time;
-    // how many bytes are drained per second
-    __u64 rate;
     // how much of the occupancy is actually magic
     __u64 magic;
     // counter for burst control
     __u64 burst_occupancy;
     // how much bytes wanted to get through this queue (passed & aborted)
     __u64 throughput;
+    // diff of rate to capacity
+    __s32 rate_diff;
+    // reset flag (set from global timer)
+    __u32 reset;
 };
 
 struct global_phantom_queue {
@@ -234,9 +236,6 @@ static __u32 timer_callback(
             __u64 curr_tp = lq->queues[ph_queue].throughput;
             __u64 prev_tp = globals->queues[ph_queue]
                                 .rx_queue_throughput[rx_queue];
-            // reset local throughput counter
-            // (1 to avoid division by 0 problems)
-            __sync_lock_test_and_set(&lq->queues[ph_queue].throughput, 1);
             // update global moving average
             __u64 avg = (prev_tp + curr_tp) / 2;
             log("throughput in queue (ph: %u, rx: %u) is (curr: %lu, prev: "
@@ -265,20 +264,23 @@ static __u32 timer_callback(
                                          .rx_queue_throughput[rx_queue];
             __u64 agg_throughput = aggregate_throughput[ph_queue];
             __u64 global_capacity = globals->queues[ph_queue].capacity;
-            __u64 global_rate = globals->queues[ph_queue].rate;
             __u64 local_capacity = (local_throughput * global_capacity)
                                    / agg_throughput;
-            __u64 local_rate = (local_throughput * global_rate)
-                               / agg_throughput;
-            log("update queue: (agg: %lu, local tp: %lu, global cap: %lu, "
-                "global rate: %lu)",
-                agg_throughput, local_throughput, global_capacity, global_rate);
-            log("update queue (ph: %u, rx: %u) capacity (old: %lu, new: %lu) "
-                "and rate (old: %lu, new: %lu)",
-                ph_queue, rx_queue, lpq->capacity, local_capacity, lpq->rate,
-                local_rate);
-            __sync_lock_test_and_set(&lpq->capacity, local_capacity);
-            __sync_lock_test_and_set(&lpq->rate, local_rate);
+            __u64 old_local_capacity = lpq->capacity;
+            log("update queue: agg: %lu, local tp: %lu, global cap: %lu",
+                agg_throughput, local_throughput, global_capacity);
+            log("update queue (ph: %u, rx: %u) capacity (old: %lu, new: %lu)",
+                ph_queue, rx_queue, old_local_capacity, local_capacity);
+            if (old_local_capacity != local_capacity) {
+                __sync_lock_test_and_set(&lpq->capacity, local_capacity);
+                // signal to the local queue that it should reset it's
+                // throughput counter, and that we have changed the capacity
+                __sync_lock_test_and_set(&lq->queues[ph_queue].reset, 2);
+            } else {
+                // signal to the local queue that it should reset it's
+                // throughput counter
+                __sync_lock_test_and_set(&lq->queues[ph_queue].reset, 1);
+            }
         }
     }
 
@@ -324,9 +326,21 @@ static __s64 burst_control(
 ) {
     // unlike in the paper we assume that all queues are active
     // and that the queue size is proportional to the demand
-    __u8 rolled_over;
+    __u8 rolled_over, reset;
     __u64 burst_occupancy;
-    // manage burst queue
+
+    reset = queue->reset;
+    if (reset) {
+        // the global timer has asked us to reset the throughput counter
+        queue->reset = 0;
+        queue->throughput = packet_size;
+        if (reset == 2) {
+            // the capacity has changed. Since the magic is supposed to fill the
+            // queue we reset so that we can gracefully calculate it again for
+            // the new size
+            queue->magic = 0;
+        }
+    }
 
     __u64 burst_window_offset = (previous % BURST_TIME) + (now - previous);
     // the following is equivalent to
@@ -356,7 +370,7 @@ static __s64 burst_control(
     }
 
 
-    __u64 r_i = queue->rate;
+    __u64 r_i = (__u64)((__s64)queue->capacity + queue->rate_diff);
     __u64 x_i = r_i * BURST_TIME / ONE_SECOND;
     // calculate thresholds (0.5, 1.5)
     __u64 x_i_half = x_i >> 1;
@@ -396,14 +410,13 @@ static __u64 try_increment_counter(
     __u32 key, struct local_phantom_queue* queue, __u64 packet_size
 ) {
     // always count throughput, no matter whether we pass/drop this packet
-    // since we reset this from the timer we have to use an atomic
-    __sync_fetch_and_add(&queue->throughput, packet_size);
+    queue->throughput += packet_size;
 
     __u64 now = bpf_ktime_get_ns();
     __u64 previous = queue->time;
-    __u64 rate = queue->rate;
-    __s64 occupancy = queue->occupancy;
     __u64 capacity = queue->capacity;
+    __u64 rate = (__u64)((__s64)capacity + queue->rate_diff);
+    __s64 occupancy = queue->occupancy;
     __u64 drain = calculate_drain(now, previous, rate);
 
     __s64 diff = 0;
@@ -572,9 +585,7 @@ static __u32 initialize(struct global_queues* globals) {
             __sync_lock_test_and_set(
                 &(locals->queues[ph_queue].capacity), RATE / RX_QUEUES
             );
-            __sync_lock_test_and_set(
-                &(locals->queues[ph_queue].rate), RATE / RX_QUEUES
-            );
+            __sync_lock_test_and_set(&(locals->queues[ph_queue].rate_diff), 0);
             __sync_lock_test_and_set(&(locals->queues[ph_queue].time), time);
             __sync_lock_test_and_set(&(locals->queues[ph_queue].throughput), 1);
         }
