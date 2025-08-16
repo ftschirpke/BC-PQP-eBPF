@@ -186,7 +186,7 @@ struct global_phantom_queue {
 
 struct local_queues {
     struct local_phantom_queue queues[PHANTOM_QUEUES];
-} __attribute__((aligned(64)));
+};
 
 struct global_queues {
     __u64 initialized;
