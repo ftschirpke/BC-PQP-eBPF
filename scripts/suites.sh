@@ -83,29 +83,33 @@ case $command in
             "$dir/net.sh test advanced client"
         )
         ;;
-    all_tests)
+    burst_test)
+        mkdir -p tests-$(git rev-parse HEAD)
+        cd tests-$(git rev-parse HEAD)
+        # NOTE: do not rely on this, rather use it as help on what you could do to (manually) run a bursty test
         commands=(
-            "$dir/net.sh test advanced server"
+            "$dir/net.sh test simple server -o burst-server.json -x 5201"
+            "$dir/net.sh test simple server -o burst-server.json -x 5202"
+            "$dir/net.sh test simple client -o burst-client.json -t 20 -x 5201 -b 400M -c 12345"
 "$(cat<<EOF
-mkdir -p tests-$(git rev-parse HEAD) && cd tests-$(git rev-parse HEAD) &&
-$dir/net.sh test advanced client rrul &&
-sleep 2 &&
-$dir/net.sh test advanced client rrul_up &&
-sleep 2 &&
-$dir/net.sh test advanced client rrul_icmp &&
-sleep 2 &&
-$dir/net.sh test advanced client tcp_1up &&
-sleep 2 &&
-$dir/net.sh test advanced client tcp_4up &&
-sleep 2 &&
-$dir/net.sh test advanced client tcp_12up &&
-sleep 2 &&
-$dir/net.sh test advanced client udp_flood &&
-echo Put a simple description of the state of the project here >> README &&
-"${EDITOR:-vi}" README
+$dir/net.sh test simple client -o burst-client.json -t 2 -x 5202 -c 13345 &&
+sleep 0.5 &&
+$dir/net.sh test simple client -o burst-client.json -t 2 -x 5202 -c 13345 &&
+sleep 0.5 &&
+$dir/net.sh test simple client -o burst-client.json -t 2 -x 5202 -c 13345 &&
+sleep 0.5 &&
+$dir/net.sh test simple client -o burst-client.json -t 2 -x 5202 -c 13345 &&
+sleep 0.5 &&
+$dir/net.sh test simple client -o burst-client.json -t 2 -x 5202 -c 13345 &&
+sleep 0.5 &&
+$dir/net.sh test simple client -o burst-client.json -t 2 -x 5202 -c 13345 &&
+sleep 0.5 &&
+$dir/net.sh test simple client -o burst-client.json -t 2 -x 5202 -c 13345
 EOF
 )"
         )
+        echo Put a simple description of the state of the project here >> README
+        "${EDITOR:-vi}" README
         ;;
     *)
         echo "Unknown command $1"
