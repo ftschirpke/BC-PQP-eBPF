@@ -186,10 +186,6 @@ struct global_phantom_queue {
     __u64 rx_queue_throughput[RX_QUEUES];
 };
 
-struct local_queues {
-    struct local_phantom_queue queues[PHANTOM_QUEUES];
-};
-
 struct global_queues {
     __u64 initialized;
     struct bpf_timer timer;
@@ -197,10 +193,10 @@ struct global_queues {
 };
 
 struct {
-    __uint(type, BPF_MAP_TYPE_ARRAY);
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
     __type(key, __u32);
-    __type(value, struct local_queues);
-    __uint(max_entries, RX_QUEUES);
+    __type(value, struct local_phantom_queue);
+    __uint(max_entries, PHANTOM_QUEUES);
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } xdp_general_map SEC(".maps");
 
@@ -216,24 +212,27 @@ static __u32 timer_callback(
     void* map, __u32* key, struct global_queues* globals
 ) {
     __u64 aggregate_throughput[PHANTOM_QUEUES] = {0};
-    __u32 rx_queue, rx_queue_key, ph_queue;
+    __u32 rx_queue, ph_queue_key, ph_queue, res;
     // get all current throughput measurements and aggregate them
 
     bpf_for(rx_queue, 0, RX_QUEUES) {
-        // this is a small trick to make the verifier happy
-        // we need to pass a reference of rx_queue to bpf_map_lookup_elem, which
-        // will reset all assertions the verifier has about this variable (i.e.
-        // bounds). We use a single-use copy to circumvent problems.
-        rx_queue_key = rx_queue;
-        struct local_queues* lq = (struct local_queues*)bpf_map_lookup_elem(
-            &xdp_general_map, &rx_queue_key
-        );
-        if (unlikely(lq == NULL)) {
-            log("failed to read from local_queues index %u", rx_queue_key);
-            goto reset_timer;
-        }
         bpf_for(ph_queue, 0, PHANTOM_QUEUES) {
-            __u64 curr_tp = lq->queues[ph_queue].throughput;
+            // this is a small trick to make the verifier happy
+            // we need to pass a reference of rx_queue to bpf_map_lookup_elem,
+            // which will reset all assertions the verifier has about this
+            // variable (i.e. bounds). We use a single-use copy to circumvent
+            // problems.
+            ph_queue_key = ph_queue;
+            struct local_phantom_queue* lq = (struct local_phantom_queue*)
+                bpf_map_lookup_percpu_elem(
+                    &xdp_general_map, &ph_queue_key, rx_queue
+                );
+            if (unlikely(lq == NULL)) {
+                log("failed to read from local_queues index %u, core %u",
+                    ph_queue_key, rx_queue);
+                goto reset_timer;
+            }
+            __u64 curr_tp = lq->throughput;
             __u64 prev_tp = globals->queues[ph_queue]
                                 .rx_queue_throughput[rx_queue];
             // update global moving average
@@ -250,16 +249,17 @@ static __u32 timer_callback(
     // calculate updated capacity & rate values and set them in the local queues
 
     bpf_for(rx_queue, 0, RX_QUEUES) {
-        rx_queue_key = rx_queue;
-        struct local_queues* lq = (struct local_queues*)bpf_map_lookup_elem(
-            &xdp_general_map, &rx_queue_key
-        );
-        if (unlikely(lq == NULL)) {
-            log("failed to read from local_queues index %u", rx_queue_key);
-            goto reset_timer;
-        }
         bpf_for(ph_queue, 0, PHANTOM_QUEUES) {
-            struct local_phantom_queue* lpq = &lq->queues[ph_queue];
+            ph_queue_key = ph_queue;
+            struct local_phantom_queue* lpq = (struct local_phantom_queue*)
+                bpf_map_lookup_percpu_elem(
+                    &xdp_general_map, &ph_queue_key, rx_queue
+                );
+            if (unlikely(lpq == NULL)) {
+                log("failed to read from local_queues index %u, core %u",
+                    ph_queue_key, rx_queue);
+                goto reset_timer;
+            }
             __u64 local_throughput = globals->queues[ph_queue]
                                          .rx_queue_throughput[rx_queue];
             __u64 agg_throughput = aggregate_throughput[ph_queue];
@@ -275,22 +275,21 @@ static __u32 timer_callback(
                 __sync_lock_test_and_set(&lpq->capacity, local_capacity);
                 // signal to the local queue that it should reset it's
                 // throughput counter, and that we have changed the capacity
-                __sync_lock_test_and_set(&lq->queues[ph_queue].reset, 2);
+                __sync_lock_test_and_set(&lpq->reset, 2);
             } else {
                 // signal to the local queue that it should reset it's
                 // throughput counter
-                __sync_lock_test_and_set(&lq->queues[ph_queue].reset, 1);
+                __sync_lock_test_and_set(&lpq->reset, 1);
             }
         }
     }
 
 // reset the timer
 reset_timer:
+    res = bpf_timer_start(&globals->timer, CALLBACK_TIME, 0);
     log("resetting timer");
-    __u32 res = bpf_timer_start(&globals->timer, CALLBACK_TIME, 0);
     if (unlikely(res)) {
         log("error: could not reset timer in callback %ld", res);
-        return 0;
     }
     return 0;
 }
@@ -559,7 +558,7 @@ static __u32 initialize(struct global_queues* globals) {
     // to complete before accessing the maps, other threads should never see the
     // uninitialized structures.
 
-    __u32 rx_queue, ph_queue;
+    __u32 rx_queue, ph_queue, ph_queue_key;
     bpf_for(ph_queue, 0, PHANTOM_QUEUES) {
         __sync_lock_test_and_set(&(globals->queues[ph_queue].capacity), RATE);
         __sync_lock_test_and_set(&(globals->queues[ph_queue].rate), RATE);
@@ -573,21 +572,21 @@ static __u32 initialize(struct global_queues* globals) {
     // initialize local structures
     __u64 time = bpf_ktime_get_ns();
     bpf_for(rx_queue, 0, RX_QUEUES) {
-        struct local_queues* locals = (struct local_queues*)bpf_map_lookup_elem(
-            &xdp_general_map, &rx_queue
-        );
-        if (unlikely(locals == NULL)) {
-            // make verifier happy
-            log("could not read from local_queues map index %u", rx_queue);
-            return 0;
-        }
         bpf_for(ph_queue, 0, PHANTOM_QUEUES) {
-            __sync_lock_test_and_set(
-                &(locals->queues[ph_queue].capacity), RATE / RX_QUEUES
-            );
-            __sync_lock_test_and_set(&(locals->queues[ph_queue].rate_diff), 0);
-            __sync_lock_test_and_set(&(locals->queues[ph_queue].time), time);
-            __sync_lock_test_and_set(&(locals->queues[ph_queue].throughput), 1);
+            ph_queue_key = ph_queue;
+            struct local_phantom_queue* lpq = (struct local_phantom_queue*)
+                bpf_map_lookup_percpu_elem(
+                    &xdp_general_map, &ph_queue_key, rx_queue
+                );
+            if (unlikely(lpq == NULL)) {
+                log("failed to read from local_queues index %u, core %u",
+                    ph_queue_key, rx_queue);
+                return 1;
+            }
+            __sync_lock_test_and_set(&(lpq->capacity), RATE / RX_QUEUES);
+            __sync_lock_test_and_set(&(lpq->rate_diff), 0);
+            __sync_lock_test_and_set(&(lpq->time), time);
+            __sync_lock_test_and_set(&(lpq->throughput), 1);
         }
     }
 
@@ -616,8 +615,7 @@ static __u32 initialize(struct global_queues* globals) {
 
 SEC("xdp")
 __u32 bc_pqp_xdp(struct xdp_md* ctx) {
-    __u32 rx_index = ctx->rx_queue_index;
-    log("===== BC-PQP on rx-queue %u =====", rx_index);
+    log("===== BC-PQP on rx-queue %u =====", ctx->rx_queue_index);
 
     __u32 zero = 0;
     struct global_queues* globals = (struct global_queues*)bpf_map_lookup_elem(
@@ -640,16 +638,16 @@ __u32 bc_pqp_xdp(struct xdp_md* ctx) {
         goto abort;
     }
 
-    struct local_queues* queues = (struct local_queues*)bpf_map_lookup_elem(
-        &xdp_general_map, &rx_index
-    );
 
-    if (likely(queues != NULL)) {
-        __u32 classification, packet_size;
-        classify_packet(ctx, &classification, &packet_size);
-        if (likely(classification < PHANTOM_QUEUES)) {
+    __u32 classification, packet_size;
+    classify_packet(ctx, &classification, &packet_size);
+
+    if (likely(classification < PHANTOM_QUEUES)) {
+        struct local_phantom_queue* queue = (struct local_phantom_queue*)
+            bpf_map_lookup_elem(&xdp_general_map, &classification);
+        if (likely(queue != NULL)) {
             __u64 result = try_increment_counter(
-                classification, &(queues->queues[classification]), packet_size
+                classification, queue, packet_size
             );
             if (!result) {
                 goto pass;
@@ -657,13 +655,14 @@ __u32 bc_pqp_xdp(struct xdp_md* ctx) {
                 goto drop;
             }
         } else {
-            // unknown classification, let the kernel deal with it
-            goto kernel;
+            // something went wrong
+            goto abort;
         }
     } else {
-        log("Could not read element %u from local queues map", rx_index);
-        goto abort;
+        // unknown classification, let the kernel deal with it
+        goto kernel;
     }
+
 
 abort:
     log("We are aborting");
