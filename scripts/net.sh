@@ -390,7 +390,7 @@ TEST_SIMPLE_DEFAULT_SAMPLING_INTERVAL="0.1"
 test__simple__server__help() {
 
 cat <<EOF
-Usage:  $0 test simple server [ -h ] [ -r ]
+Usage:  $0 test simple server [ -h ] [ -r ] [ -i interval ] [ -o filepath ] [ -x port ]
 
     Start up an iperf3 server for the use with iperf3 clients.
 
@@ -400,6 +400,7 @@ Usage:  $0 test simple server [ -h ] [ -r ]
     -i|--interval       Sampling interval in seconds i.e. interval between
                         bandwidth and loss reports (default: $TEST_SIMPLE_DEFAULT_SAMPLING_INTERVAL)
     -o|--output         File path to write JSON log values to (default: None, instead write human-readable to stdout)
+    -x|--lstnport <val> Server port to listen for client on
 EOF
 
 }
@@ -408,6 +409,7 @@ test__simple__server() {
 
     reverse=false
     interval=""
+    port=""
     while [[ $# -gt 0 ]]; do
         case $1 in
             -h|--help)
@@ -428,6 +430,12 @@ test__simple__server() {
                 [ -z "$output" ] || { echo "Found option '$1' while already specified $output as the output file."; return 1; }
                 shift
                 output="$1"
+                shift
+                ;;
+            -x|--lstnport)
+                [ -z "$port" ] || { echo "Found option '$1' while already specified $port as the server port."; return 1; }
+                shift
+                port="$1"
                 shift
                 ;;
             *)
@@ -454,7 +462,13 @@ test__simple__server() {
         output="-J --logfile $output"
     fi
 
-    cmd="sudo ip netns exec $namespace iperf3 -s -i $interval $output"
+    if [[ "$port" == "" ]]; then
+        port=""
+    else
+        port="-p $port"
+    fi
+
+    cmd="sudo ip netns exec $namespace iperf3 -s -i $interval $output $port"
 
     echo "Executing: $cmd"
     echo
@@ -467,12 +481,14 @@ TEST_SIMPLE_DEFAULT_BITRATE="0"
 TEST_SIMPLE_DEFAULT_TIME="5"
 TEST_SIMPLE_DEFAULT_STREAMS="1"
 TEST_SIMPLE_DEFAULT_PACKET_SIZE="1448"
+TEST_SIMPLE_DEFAULT_CLIENT_PORT="12345"
 
 test__simple__client__help() {
 
 cat <<EOF
 Usage:  $0 test simple client [ -h ] [ -r ] [ -b bitrate ] [ -t seconds ]
-                      [ -p streams ] [ -o ] [ --udp | --tcp ] [ -s size ]
+                      [ -p streams ] [ -o filepath ] [ -i interval ] [ -c port ] [ -x port ]
+                      [ --udp | --tcp ] [ -s size ]
 
     Start up an iperf3 client.
 
@@ -485,6 +501,8 @@ Usage:  $0 test simple client [ -h ] [ -r ] [ -b bitrate ] [ -t seconds ]
     -o|--output         File path to write JSON log values to (default: None, instead write human-readable to stdout)
     -i|--interval       Sampling interval in seconds i.e. interval between
                         bandwidth and loss reports (default: $TEST_SIMPLE_DEFAULT_SAMPLING_INTERVAL)
+    -c|--cltport <val>  Client port to send from (default: $TEST_SIMPLE_DEFAULT_CLIENT_PORT)
+    -x|--dstport <val>  Server port to connect to
 
     --udp               (Default) Send UDP packets
     --tcp               Send TCP packets
@@ -503,6 +521,8 @@ test__simple__client() {
     type=""
     size=""
     interval=""
+    cport=""
+    port=""
     while [[ $# -gt 0 ]]; do
         case $1 in
             -h|--help)
@@ -554,6 +574,18 @@ test__simple__client() {
                 interval="$1"
                 shift
                 ;;
+            -c|--cltport)
+                [ -z "$cport" ] || { echo "Found option '$1' while already specified $cport as the client port."; return 1; }
+                shift
+                cport="$1"
+                shift
+                ;;
+            -x|--dstport)
+                [ -z "$port" ] || { echo "Found option '$1' while already specified $port as the server port."; return 1; }
+                shift
+                port="$1"
+                shift
+                ;;
             *)
                 echo "Unknown option $1"
                 test__simple__client__help
@@ -599,13 +631,25 @@ test__simple__client() {
         output="-J --logfile $output"
     fi
 
+    if [[ "$cport" == "" ]]; then
+        cport="--cport $TEST_SIMPLE_DEFAULT_CLIENT_PORT"
+    else
+        cport="--cport $cport"
+    fi
+
+    if [[ "$port" == "" ]]; then
+        port=""
+    else
+        port="-p $port"
+    fi
+
     if [[ "$interval" == "" ]]; then
         interval="$TEST_SIMPLE_DEFAULT_SAMPLING_INTERVAL"
     fi
 
-    base_cmd="sudo ip netns exec $namespace iperf3 -i $interval -c $target --cport 12345"
+    base_cmd="sudo ip netns exec $namespace iperf3 -i $interval -c $target"
 
-    cmd="$base_cmd -b $rate -t $time -P $streams -l $size $type $output"
+    cmd="$base_cmd -b $rate -t $time -P $streams -l $size $type $output $cport $port"
 
     echo "Executing: $cmd"
     echo
