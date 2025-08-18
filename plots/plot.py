@@ -322,6 +322,103 @@ def plot_iperf3_file(fig, ax, file: Path, options: IPerf3PlotOptions):
     ax.set_ylabel("Rate in Gbit/s")
 
 
+def plot_flow_server_file(file: Path, show_tx=True):
+    with open(file, "r") as f:
+        obj = json.load(f)
+
+    assert isinstance(obj, list) and len(obj) == 1
+    obj = obj[0]
+    obj = obj["data"]["out"]["throughput"]
+
+    rx_obj = obj["RX"]
+    tx_obj = obj["TX"]
+
+    rx_times = rx_obj["Time_vals"]
+    tx_times = tx_obj["Time_vals"]
+
+    def val_func(mbit_val):
+        return mbit_val / 1024
+
+    rx_vals = list(map(val_func, rx_obj["Mbit_vals"]))
+    tx_vals = list(map(val_func, tx_obj["Mbit_vals"]))
+
+    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+
+    ax.plot(rx_times, rx_vals, label="RX")
+    if show_tx:
+        ax.plot(tx_times, tx_vals, label="TX")
+
+    ax.set_xlabel("Time after test start in seconds")
+    ax.set_ylabel("Rate in Gbit/s")
+    ax.legend()
+
+    plt.show()
+
+
+def plot_scale_server_file(file: Path, show_tx=True, show_physical_cores=20):
+    with open(file, "r") as f:
+        obj = json.load(f)
+
+    assert isinstance(obj, list)  # and len(obj) == 1
+
+    data64 = {}
+    data_mtu = {}
+
+    def val_func(mbit_val):
+        return mbit_val / 1024
+
+    for o in obj:
+        queue_count = o["config"]["txqs"]
+        pkt_size = o["config"]["pkt-size"]
+        o_data = o["data"]["out"]["throughput"]
+        rx_val = val_func(o_data["RX"]["Mbit"])
+        tx_val = val_func(o_data["TX"]["Mbit"])
+        if pkt_size == 64:
+            data64[queue_count] = (rx_val, tx_val)
+        elif pkt_size == 1514:
+            data_mtu[queue_count] = (rx_val, tx_val)
+        else:
+            assert False, f"{pkt_size =} is neither 64 nor 1514"
+
+    fig, (ax64, ax_mtu) = plt.subplots(1, 2, figsize=(12, 6))
+
+    counts = []
+    rx_vals = []
+    tx_vals = []
+    for count, (rx, tx) in sorted(data64.items()):
+        counts.append(count)
+        rx_vals.append(rx)
+        tx_vals.append(tx)
+    ax64.plot(counts, rx_vals, label="RX")
+    if show_tx:
+        ax64.plot(counts, tx_vals, label="TX")
+    ax64.set_xlabel("Number of RX queues")
+    ax64.set_ylabel("Average enforced rate in Gbit/s")
+    if isinstance(show_physical_cores, int) and show_physical_cores > 0:
+        y_min, y_max = ax64.get_ylim()
+        ax64.vlines(show_physical_cores, y_min, y_max, color="red", linewidth=2, label="Number of physical cores")
+    ax64.legend()
+
+    counts = []
+    rx_vals = []
+    tx_vals = []
+    for count, (rx, tx) in sorted(data_mtu.items()):
+        counts.append(count)
+        rx_vals.append(rx)
+        tx_vals.append(tx)
+    ax_mtu.plot(counts, rx_vals, label="RX")
+    if show_tx:
+        ax_mtu.plot(counts, tx_vals, label="TX")
+    ax_mtu.set_xlabel("Number of RX queues")
+    ax_mtu.set_ylabel("Average enforced rate in Gbit/s")
+    if isinstance(show_physical_cores, int) and show_physical_cores > 0:
+        y_min, y_max = ax_mtu.get_ylim()
+        ax_mtu.vlines(show_physical_cores, y_min, y_max, color="red", linewidth=2, label="Number of physical cores")
+    ax_mtu.legend()
+
+    plt.show()
+
+
 def bursty_plot(save_plots: bool):
     fig, ax = plt.subplots(1, 1, figsize=(6, 6))
     options = IPerf3PlotOptions()
@@ -395,6 +492,10 @@ def save_or_show(fig: plt.figure, path: Path, save_plot: bool):
 
 
 if __name__ == "__main__":
+    plot_flow_server_file(DATA_DIR / "server-v2" / "flow-data.json")
+    plot_scale_server_file(DATA_DIR / "server-v2" / "scale-data.json")
+    exit(0)
+
     # save_plots = input("Press 'S' to save the plots instead of showing them: ").lower().startswith("s")
     # bursty_plot(save_plots)
     # progress_plot(save_plots)
