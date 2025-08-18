@@ -40,7 +40,7 @@ echo $CLANG -target bpf \
     -D CLASSIFY_BY_DESTINATION \
     -DRX_QUEUES="$RX_QUEUES" \
     -DPHANTOM_QUEUES="$FLOWS" \
-    -DBITRATE="$BITRATE" \
+    -DTOTAL_BITRATE="$BITRATE" \
     -DEGRESS_INTERFACE="$EGRESS_IF_INDEX" \
     -DEGRESS_MAC="$HEX_EGRESS_IF_MAC" \
     -DNEXT_HOP_MAC="$HEX_NEXT_HOP_MAC" \
@@ -54,7 +54,7 @@ $CLANG -target bpf \
     -D CLASSIFY_BY_DESTINATION \
     -DRX_QUEUES="$RX_QUEUES" \
     -DPHANTOM_QUEUES="$FLOWS" \
-    -DBITRATE="$BITRATE" \
+    -DTOTAL_BITRATE="$BITRATE" \
     -DEGRESS_INTERFACE="$EGRESS_IF_INDEX" \
     -DEGRESS_MAC="$HEX_EGRESS_IF_MAC" \
     -DNEXT_HOP_MAC="$HEX_NEXT_HOP_MAC" \
@@ -62,6 +62,8 @@ $CLANG -target bpf \
     $WARN_FLAGS \
     -c "$PROGRAM_NAME.c" \
     -o "$PROGRAM_NAME.o"
+
+exit 0
     
 echo "Loading program..."
 $SUDO ip link set dev "$INGRESS_IF_NAME" xdpgeneric obj "$PROGRAM_NAME.o" sec xdp
