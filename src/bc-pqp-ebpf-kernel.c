@@ -37,6 +37,10 @@
 #define BURST_TIME 10000000L
 #endif
 
+#ifdef TOTAL_BITRATE
+#define BITRATE (TOTAL_BITRATE / PHANTOM_QUEUES)
+#endif
+
 #ifdef BITRATE
 #define RATE (BITRATE >> 3)
 #endif
