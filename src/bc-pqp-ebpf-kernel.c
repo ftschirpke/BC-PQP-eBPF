@@ -655,6 +655,9 @@ static __u32 initialize(struct global_queues* globals) {
 
 SEC("xdp")
 __u32 bc_pqp_xdp(struct xdp_md* ctx) {
+#ifdef BASELINE
+    goto pass;
+#endif
     log("===== BC-PQP on rx-queue %u =====", ctx->rx_queue_index);
 
     __u32 zero = 0;

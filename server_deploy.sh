@@ -63,8 +63,6 @@ $CLANG -target bpf \
     -c "$PROGRAM_NAME.c" \
     -o "$PROGRAM_NAME.o"
 
-exit 0
-    
 echo "Loading program..."
 $SUDO ip link set dev "$INGRESS_IF_NAME" xdpgeneric obj "$PROGRAM_NAME.o" sec xdp
 
