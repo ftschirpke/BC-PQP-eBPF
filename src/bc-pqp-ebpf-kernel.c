@@ -86,6 +86,15 @@
 // a poor-mans log_2, calculated by looking at the MSB
 #define ld(x) (64 - (__u32)__builtin_clzll((__u64)x))
 
+#define INIT_NOT_STARTED 0
+#define INIT_STARTED 1
+#define INIT_DONE 2
+
+#define UPDATE_NOT_STARTED 0
+#define UPDATE_THROUGHPUT 1
+#define UPDATE_THROUGHPUT_CAPACITY 2
+
+
 enum mac_index {
     MAC_CLIENT,
     MAC_VM_INGRESS,
@@ -275,11 +284,13 @@ static __u32 timer_callback(
                 __sync_lock_test_and_set(&lpq->capacity, local_capacity);
                 // signal to the local queue that it should reset it's
                 // throughput counter, and that we have changed the capacity
-                __sync_lock_test_and_set(&lpq->reset, 2);
+                __sync_lock_test_and_set(
+                    &lpq->reset, UPDATE_THROUGHPUT_CAPACITY
+                );
             } else {
                 // signal to the local queue that it should reset it's
                 // throughput counter
-                __sync_lock_test_and_set(&lpq->reset, 1);
+                __sync_lock_test_and_set(&lpq->reset, UPDATE_THROUGHPUT);
             }
         }
     }
@@ -329,11 +340,11 @@ static __s64 burst_control(
     __u64 burst_occupancy;
 
     reset = queue->reset;
-    if (reset) {
+    if (reset != UPDATE_NOT_STARTED) {
         // the global timer has asked us to reset the throughput counter
-        queue->reset = 0;
+        queue->reset = UPDATE_NOT_STARTED;
         queue->throughput = packet_size;
-        if (reset == 2) {
+        if (reset == UPDATE_THROUGHPUT_CAPACITY) {
             // the capacity has changed. Since the magic is supposed to fill the
             // queue we reset so that we can gracefully calculate it again for
             // the new size
@@ -608,7 +619,7 @@ static __u32 initialize(struct global_queues* globals) {
         log("error: could not start timer: %ld", res);
         return 1;
     }
-    __sync_lock_test_and_set(&globals->initialized, 2);
+    __sync_lock_test_and_set(&globals->initialized, INIT_DONE);
     log("global initialization done (data initialized and timer scheduled)");
     return 0;
 }
@@ -622,11 +633,13 @@ __u32 bc_pqp_xdp(struct xdp_md* ctx) {
         &global_queues_map, &zero
     );
     if (likely(globals != NULL)) {
-        if (likely(globals->initialized == 2)) {
+        if (likely(globals->initialized == INIT_DONE)) {
             // everything is already initialized
         } else {
             // try to initialize
-            if (!__sync_val_compare_and_swap(&globals->initialized, 0, 1)) {
+            if (!__sync_val_compare_and_swap(
+                    &globals->initialized, INIT_NOT_STARTED, INIT_STARTED
+                )) {
                 initialize(globals);
             } else {
                 // someone else is initializing, just pass in the meantime
