@@ -27,6 +27,7 @@ REPO_DIR = FILE_DIR.parent
 EVAL_DIR = REPO_DIR.parent / "eval"  # FIX: currently, this needs to be manually changed depending on your file layout
 DATA_DIR = EVAL_DIR / "data"
 PROGRESS_PRESENTATION_DIR = EVAL_DIR / "progress-presentation" / "figures"
+FINAL_PRESENTATION_DIR = EVAL_DIR / "final-presentation" / "figures"
 
 COLORS = ["#D81B60", "#1E88E5", "#FFC107", "#004D40"]
 
@@ -322,7 +323,114 @@ def plot_iperf3_file(fig, ax, file: Path, options: IPerf3PlotOptions):
     ax.set_ylabel("Rate in Gbit/s")
 
 
-def plot_flow_server_file(file: Path, show_tx=True):
+def plot_bursty_iperf3(file: Path, debug=False, bc_threshhold=True, rate=True, save=False, name="burst_iperf3"):
+    def val_func(byte_val, start, end):
+        return (byte_val * 8 / 1024**3) / (end - start)
+
+    with open(file, "r") as f:
+        raw_text = f.read().lstrip()
+
+    data = []
+
+    baseline_idx = None
+
+    decoder = json.JSONDecoder()
+    while raw_text:
+        partial_data, index = decoder.raw_decode(raw_text)
+        raw_text = raw_text[index:].lstrip()
+        if "error" in partial_data:
+            err = partial_data["error"]
+            if err == "interrupt - the server has terminated by signal Interrupt(2)":
+                continue
+            raise RuntimeError(f"Found unexpected error '{err}' in JSON")
+
+        test_start_sec = partial_data["start"]["timestamp"]["timesecs"]
+
+        xs = []
+        ys = []
+
+        is_first = True
+        for i, interval_data in enumerate(partial_data["intervals"]):
+            assert len(interval_data["streams"]) == 1
+            stream_data = interval_data["streams"][0]
+            val = val_func(stream_data["bytes"], stream_data["start"], stream_data["end"])
+            if is_first:
+                xs.append(stream_data["start"])
+                ys.append(-1)
+                is_first = False
+            xs.append(stream_data["end"])
+            ys.append(val)
+
+        idx = len(data)
+        data.append((test_start_sec, xs, ys))
+        if baseline_idx is None or data[baseline_idx][0] > test_start_sec:
+            baseline_idx = idx
+
+    base_start, base_xs, base_ys = data[baseline_idx]
+
+    non_baseline_idx = sorted(
+        (i for i in range(len(data)) if i != baseline_idx),
+        key=lambda idx: data[idx][0]
+    )
+
+    accumulated_xs = []
+    accumulated_ys = []
+
+    i = 1
+    for non_baseline_i in non_baseline_idx:
+        start, xs, ys = data[non_baseline_i]
+
+        while i < len(base_ys) and abs(base_ys[i] - base_ys[max(i - 1, 1)]) < 0.02:
+            accumulated_xs.append(base_xs[i])
+            accumulated_ys.append(base_ys[i])
+            i += 1
+
+        for j, y in enumerate(ys):
+            if j == 0:
+                continue
+            accumulated_xs.append(base_xs[i])
+            accumulated_ys.append(base_ys[i] + y)
+            i += 1
+
+        for _ in range(3):
+            # small buffer
+            accumulated_xs.append(base_xs[i])
+            accumulated_ys.append(base_ys[i])
+            i += 1
+
+    while i < len(base_ys):
+        accumulated_xs.append(base_xs[i])
+        accumulated_ys.append(base_ys[i])
+        i += 1
+
+    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+    mode = "post"
+    if debug:
+        ax.step(base_xs[1:-1], base_ys[1:-1], where=mode)
+    ax.step(accumulated_xs[:-1], accumulated_ys[:-1], where=mode,
+            label="Measured Traffic")
+
+    if bc_threshhold:
+        ax.hlines(1.5, min(accumulated_xs), max(accumulated_xs), colors="red",
+                  label="Upper Burst Threshold", linestyle="dashed", linewidth=2)
+
+    if rate:
+        ax.hlines(1, min(accumulated_xs), max(accumulated_xs), colors="green",
+                  label="Rate Limit", linestyle="dashed", linewidth=2)
+
+    # ax.set_xlim(options.interval_start, options.interval_end)
+    ax.set_ylim(0, None)
+
+    ax.set_xlabel("Time after test start in seconds")
+    ax.set_ylabel("Rate in Gbit/s")
+
+    ax.legend(loc="lower right")
+
+    out_path = FINAL_PRESENTATION_DIR / f"{name}.pdf"
+    save_or_show(fig, out_path, save)
+
+
+def plot_flow_server_file(file: Path, show_tx=True, save=False, name="flow_server"):
     with open(file, "r") as f:
         obj = json.load(f)
 
@@ -352,10 +460,11 @@ def plot_flow_server_file(file: Path, show_tx=True):
     ax.set_ylabel("Rate in Gbit/s")
     ax.legend()
 
-    plt.show()
+    out_path = FINAL_PRESENTATION_DIR / f"{name}.pdf"
+    save_or_show(fig, out_path, save)
 
 
-def plot_scale_server_file(file: Path, show_tx=True, show_physical_cores=20):
+def plot_scale_server_file(file: Path, show_tx=True, show_physical_cores=20, save=False, name="scale_server"):
     with open(file, "r") as f:
         obj = json.load(f)
 
@@ -378,7 +487,7 @@ def plot_scale_server_file(file: Path, show_tx=True, show_physical_cores=20):
         elif pkt_size == 1514:
             data_mtu[queue_count] = (rx_val, tx_val)
         else:
-            assert False, f"{pkt_size =} is neither 64 nor 1514"
+            assert False, f"{pkt_size=} is neither 64 nor 1514"
 
     fig, (ax64, ax_mtu) = plt.subplots(1, 2, figsize=(12, 6))
 
@@ -416,7 +525,8 @@ def plot_scale_server_file(file: Path, show_tx=True, show_physical_cores=20):
         ax_mtu.vlines(show_physical_cores, y_min, y_max, color="red", linewidth=2, label="Number of physical cores")
     ax_mtu.legend()
 
-    plt.show()
+    out_path = FINAL_PRESENTATION_DIR / f"{name}.pdf"
+    save_or_show(fig, out_path, save)
 
 
 def bursty_plot(save_plots: bool):
@@ -487,50 +597,30 @@ def save_or_show(fig: plt.figure, path: Path, save_plot: bool):
         yes = input("Save this? (y/n) ") == "y"
         if yes:
             fig.savefig(path, bbox_inches='tight', transparent=True)
+        plt.close()
     else:
         plt.show()
 
 
 if __name__ == "__main__":
-    plot_flow_server_file(DATA_DIR / "server-v2" / "flow-data.json")
-    plot_scale_server_file(DATA_DIR / "server-v2" / "scale-data.json")
-    exit(0)
 
-    # save_plots = input("Press 'S' to save the plots instead of showing them: ").lower().startswith("s")
+    save_plots = input("Press 'S' to save the plots instead of showing them: ").lower().startswith("s")
     # bursty_plot(save_plots)
     # progress_plot(save_plots)
+    plot_flow_server_file(DATA_DIR / "server-v2" / "flow-data.json", name="nonshared_flow_exp", save=save_plots)
+    plot_scale_server_file(DATA_DIR / "server-v2" / "scale-data.json", name="nonshared_scale_exp", save=save_plots)
+    plot_scale_server_file(DATA_DIR / "server-v2" / "baseline_scaling.json", name="baseline_scale_exp", save=save_plots)
+    plot_bursty_iperf3(DATA_DIR / "burst" / "server.json", name="nonsharded_udp_burst", save=save_plots)
 
-    # if save_plots or input("Press ENTER to continue with \"exploration plots\" "):
-    #     # do not show "exploration plots"
-    #     exit(0)
+    if input("Press ENTER to continue with \"exploration plots\" "):
+        # do not show "exploration plots"
+        exit(0)
 
     options = ExplorePlotOptions()
-    options.iperf3_files.append(DATA_DIR / "debug" / "client.json")
-    options.iperf3_files.append(DATA_DIR / "debug" / "server.json")
-    # options.iperf3_options.send_gbit_rate = 20 * 1000**2 / 1024**3
-    # options.iperf3_options.interval_start = 0
-    # options.iperf3_options.interval_end = 1
     options.iperf3_options.show_avg = False
     options.iperf3_options.show_enforced_rate = False
     options.legend = False
-    exploration_plots(options)
-
     options.clear_files()
-    options.iperf3_files.append(DATA_DIR / "debug" / "lowrate-client.json")
-    options.iperf3_files.append(DATA_DIR / "debug" / "lowrate-server.json")
+    options.iperf3_files.append(DATA_DIR / "burst" / "client.json")
+    options.iperf3_files.append(DATA_DIR / "burst" / "server.json")
     exploration_plots(options)
-
-    options.clear_files()
-    options.iperf3_files.append(DATA_DIR / "burst" / "full_client.json")
-    options.iperf3_files.append(DATA_DIR / "burst" / "full_server.json")
-    exploration_plots(options)
-
-    options.clear_files()
-    options.iperf3_files.append(DATA_DIR / "burst" / "full_single_client.json")
-    options.iperf3_files.append(DATA_DIR / "burst" / "full_single_server.json")
-    exploration_plots(options)
-
-    # options.clear_files()
-    # options.iperf3_files.append(DATA_DIR / "bc-test" / "bc-pqp-client.json")
-    # options.iperf3_files.append(DATA_DIR / "bc-test" / "bc-pqp-server.json")
-    # exploration_plots(options)
