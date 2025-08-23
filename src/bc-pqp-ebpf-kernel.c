@@ -338,6 +338,7 @@ static __s64 burst_control(
     // and that the queue size is proportional to the demand
     __u8 rolled_over, reset;
     __u64 burst_occupancy;
+    __u64 old_magic = 0;
 
     reset = queue->reset;
     if (reset != UPDATE_NOT_STARTED) {
@@ -348,7 +349,18 @@ static __s64 burst_control(
             // the capacity has changed. Since the magic is supposed to fill the
             // queue we reset so that we can gracefully calculate it again for
             // the new size
+            old_magic = queue->magic;
             queue->magic = 0;
+            // the queue size was decreased by the timer
+            if (queue->occupancy > (__s64)queue->capacity) {
+                __u64 removed = (__u64)queue->occupancy - queue->capacity;
+                queue->occupancy = (__s64)queue->capacity;
+                if (old_magic > removed) {
+                    old_magic -= removed;
+                } else {
+                    old_magic = 0;
+                }
+            }
         }
     }
 
@@ -390,13 +402,13 @@ static __s64 burst_control(
 
     if (burst_occupancy > x_i_plus) {
         // fill queue with magic packets
-        if (queue->magic == 0) {
+        if (queue->magic == 0 || old_magic != 0) {
             __u64 magic = queue->capacity - (__u64)queue->occupancy;
             queue->magic = magic;
             log("should add %lu magic bytes to queue %d with burst "
                 "occupancy %lu",
                 magic, key, burst_occupancy);
-            return (__s64)magic;
+            return (__s64)magic - (__s64)old_magic;
         }
 
     } else if (rolled_over == 1 && burst_occupancy < x_i_minus) {
