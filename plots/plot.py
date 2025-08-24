@@ -72,6 +72,11 @@ class ExplorePlotOptions:
 
 
 def exploration_plots(options: ExplorePlotOptions):
+    print("PLOT:")
+    if options.flent_files:
+        print("  " + ", ".join(str(f.relative_to(DATA_DIR)) for f in options.flent_files))
+    if options.iperf3_files:
+        print("  " + ", ".join(str(f.relative_to(DATA_DIR)) for f in options.iperf3_files))
     cols = bool(len(options.flent_files)) + bool(len(options.iperf3_files))
     if cols == 0:
         return
@@ -408,15 +413,15 @@ def plot_bursty_iperf3(file: Path, debug=False, bc_threshhold=True, rate=True, s
     if debug:
         ax.step(base_xs[1:-1], base_ys[1:-1], where=mode)
     ax.step(accumulated_xs[:-1], accumulated_ys[:-1], where=mode,
-            label="Measured Traffic")
+            label="Measured traffic")
 
     if bc_threshhold:
         ax.hlines(1.5, min(accumulated_xs), max(accumulated_xs), colors="red",
-                  label="Upper Burst Threshold", linestyle="dashed", linewidth=2)
+                  label="Upper burst threshold", linestyle="dashed", linewidth=2)
 
     if rate:
         ax.hlines(1, min(accumulated_xs), max(accumulated_xs), colors="green",
-                  label="Rate Limit", linestyle="dashed", linewidth=2)
+                  label="Rate limit", linestyle="dashed", linewidth=2)
 
     # ax.set_xlim(options.interval_start, options.interval_end)
     ax.set_ylim(0, None)
@@ -452,9 +457,9 @@ def plot_flow_server_file(file: Path, show_tx=True, save=False, name="flow_serve
 
     fig, ax = plt.subplots(1, 1, figsize=(12, 6))
 
-    ax.plot(rx_times, rx_vals, label="RX")
+    ax.plot(rx_times, rx_vals, label="Traffic received")
     if show_tx:
-        ax.plot(tx_times, tx_vals, label="TX")
+        ax.plot(tx_times, tx_vals, label="Traffic sent")
 
     ax.set_xlabel("Time after test start in seconds")
     ax.set_ylabel("Rate in Gbit/s")
@@ -489,7 +494,8 @@ def plot_scale_server_file(file: Path, show_tx=True, show_physical_cores=20, sav
         else:
             assert False, f"{pkt_size=} is neither 64 nor 1514"
 
-    fig, (ax64, ax_mtu) = plt.subplots(1, 2, figsize=(14, 6))
+    fig64, ax64 = plt.subplots(1, 1, figsize=(8, 6))
+    fig_mtu, ax_mtu = plt.subplots(1, 1, figsize=(8, 6))
 
     counts = []
     rx_vals = []
@@ -498,20 +504,20 @@ def plot_scale_server_file(file: Path, show_tx=True, show_physical_cores=20, sav
         counts.append(count)
         rx_vals.append(rx)
         tx_vals.append(tx)
-    ax64.plot(counts, rx_vals, label="RX")
+    ax64.plot(counts, rx_vals, label="Traffic received")
     if show_tx:
-        ax64.plot(counts, tx_vals, label="TX")
+        ax64.plot(counts, tx_vals, label="Traffic sent")
     if min_y_zoom is not None:
         y_min, y_max = ax64.get_ylim()
         if y_max - y_min < min_y_zoom:
             y_middle = (y_min + y_max) / 2
             half = min_y_zoom / 2
             ax64.set_ylim(y_middle - half, y_middle + half)
-    ax64.set_xlabel("Number of RX queues")
+    ax64.set_xlabel("Number of CPU cores")
     ax64.set_ylabel("Average enforced rate in Gbit/s")
     if isinstance(show_physical_cores, int) and show_physical_cores > 0:
         y_min, y_max = ax64.get_ylim()
-        ax64.vlines(show_physical_cores, y_min, y_max, color="red", linewidth=2, label="Number of physical cores")
+        ax64.vlines(show_physical_cores, y_min, y_max, color="red", linewidth=2, label="\#Physical cores")
     ax64.legend()
 
     counts = []
@@ -521,24 +527,26 @@ def plot_scale_server_file(file: Path, show_tx=True, show_physical_cores=20, sav
         counts.append(count)
         rx_vals.append(rx)
         tx_vals.append(tx)
-    ax_mtu.plot(counts, rx_vals, label="RX")
+    ax_mtu.plot(counts, rx_vals, label="Traffic received")
     if show_tx:
-        ax_mtu.plot(counts, tx_vals, label="TX")
+        ax_mtu.plot(counts, tx_vals, label="Traffic sent")
     if min_y_zoom is not None:
         y_min, y_max = ax_mtu.get_ylim()
         if y_max - y_min < min_y_zoom:
             y_middle = (y_min + y_max) / 2
             half = min_y_zoom / 2
             ax_mtu.set_ylim(y_middle - half, y_middle + half)
-    ax_mtu.set_xlabel("Number of RX queues")
+    ax_mtu.set_xlabel("Number of CPU cores")
     ax_mtu.set_ylabel("Average enforced rate in Gbit/s")
     if isinstance(show_physical_cores, int) and show_physical_cores > 0:
         y_min, y_max = ax_mtu.get_ylim()
-        ax_mtu.vlines(show_physical_cores, y_min, y_max, color="red", linewidth=2, label="Number of physical cores")
+        ax_mtu.vlines(show_physical_cores, y_min, y_max, color="red", linewidth=2, label="\#Physical cores")
     ax_mtu.legend()
 
-    out_path = FINAL_PRESENTATION_DIR / f"{name}.pdf"
-    save_or_show(fig, out_path, save)
+    out_path_64 = FINAL_PRESENTATION_DIR / f"{name}_64.pdf"
+    save_or_show(fig64, out_path_64, save)
+    out_path_mtu = FINAL_PRESENTATION_DIR / f"{name}_mtu.pdf"
+    save_or_show(fig_mtu, out_path_mtu, save)
 
 
 def plot_enforcement_server_file(file: Path, show_tx=True, show_linear=False, save=False, name="scale_server"):
@@ -568,15 +576,15 @@ def plot_enforcement_server_file(file: Path, show_tx=True, show_linear=False, sa
         counts.append(count)
         rx_vals.append(rx)
         tx_vals.append(tx)
-    ax.plot(counts, rx_vals, label="RX")
+    ax.plot(counts, rx_vals, label="Traffic received")
     if show_tx:
-        ax.plot(counts, tx_vals, label="TX")
+        ax.plot(counts, tx_vals, label="Traffic sent")
     if show_linear:
         x = [min(counts), max(counts)]
         ax.plot(x, x, label="Expectation", color="red", linestyle="dashed", linewidth=2)
 
     ax.set_xlabel("Configured rate to enforce")
-    ax.set_ylabel("Average enforced rate in Gbit/s")
+    ax.set_ylabel("Average throughput in Gbit/s")
     ax.legend()
 
     out_path = FINAL_PRESENTATION_DIR / f"{name}.pdf"
@@ -659,13 +667,12 @@ def save_or_show(fig: plt.figure, path: Path, save_plot: bool):
 if __name__ == "__main__":
 
     save_plots = input("Press 'S' to save the plots instead of showing them: ").lower().startswith("s")
-    # bursty_plot(save_plots)
-    # progress_plot(save_plots)
     plot_enforcement_server_file(DATA_DIR / "server-v2" / "rxq_8_flows_8.json", name="nonsharded_enforcement_8", show_linear=True, save=save_plots)
     plot_enforcement_server_file(DATA_DIR / "server-v2" / "rxq_8_flows_16.json", name="nonsharded_enforcement_16", show_linear=True, save=save_plots)
     plot_enforcement_server_file(DATA_DIR / "server-v2" / "rxq_8_flows_32.json", name="nonsharded_enforcement_32", show_linear=True, save=save_plots)
     plot_bursty_iperf3(DATA_DIR / "tcp" / "burst-server.json", name="nonsharded_tcp_burst", save=save_plots)
-    plot_flow_server_file(DATA_DIR / "server-v2" / "flow-data.json", name="nonshared_flow_exp", save=save_plots)
+    plot_bursty_iperf3(DATA_DIR / "tcp" / "reno-burst-server.json", name="nonsharded_reno_tcp_burst", save=save_plots)
+    # plot_flow_server_file(DATA_DIR / "server-v2" / "flow-data.json", name="nonshared_flow_exp", save=save_plots)
     plot_scale_server_file(DATA_DIR / "server-v2" / "scale-data.json", name="nonshared_scale_exp", save=save_plots)
     plot_scale_server_file(DATA_DIR / "server-v2" / "baseline_scaling.json", name="baseline_scale_exp", save=save_plots)
     plot_bursty_iperf3(DATA_DIR / "burst" / "server.json", name="nonsharded_udp_burst", save=save_plots)
@@ -687,4 +694,14 @@ if __name__ == "__main__":
     options.clear_files()
     options.iperf3_files.append(DATA_DIR / "tcp" / "client.json")
     options.iperf3_files.append(DATA_DIR / "tcp" / "server.json")
+    exploration_plots(options)
+
+    options.clear_files()
+    options.iperf3_files.append(DATA_DIR / "tcp" / "burst-client.json")
+    options.iperf3_files.append(DATA_DIR / "tcp" / "burst-server.json")
+    exploration_plots(options)
+
+    options.clear_files()
+    options.iperf3_files.append(DATA_DIR / "tcp" / "reno-burst-client.json")
+    options.iperf3_files.append(DATA_DIR / "tcp" / "reno-burst-server.json")
     exploration_plots(options)
