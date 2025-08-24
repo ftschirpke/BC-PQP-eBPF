@@ -430,13 +430,16 @@ static __u64 try_increment_counter(
     __u64 previous = queue->time;
     __u64 capacity = queue->capacity;
     __u64 rate = (__u64)((__s64)capacity + queue->rate_diff);
-    __s64 occupancy = queue->occupancy;
     __u64 drain = calculate_drain(now, previous, rate);
 
     __s64 diff = 0;
 
     queue->time = now;
     __s64 magic = burst_control(key, queue, previous, now, packet_size);
+    // burst control might change the occupancy, so we should read it only after
+    // that's done
+    __s64 occupancy = queue->occupancy;
+
     diff += magic;
     diff -= drain;
 
