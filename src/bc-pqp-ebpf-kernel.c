@@ -92,7 +92,8 @@
 
 #define UPDATE_NOT_STARTED 0
 #define UPDATE_THROUGHPUT 1
-#define UPDATE_THROUGHPUT_CAPACITY 2
+#define UPDATE_CAPACITY_DOWN 2
+#define UPDATE_CAPACITY_UP 3
 
 
 enum mac_index {
@@ -285,7 +286,9 @@ static __u32 timer_callback(
                 // signal to the local queue that it should reset it's
                 // throughput counter, and that we have changed the capacity
                 __sync_lock_test_and_set(
-                    &lpq->reset, UPDATE_THROUGHPUT_CAPACITY
+                    &lpq->reset, old_local_capacity > local_capacity
+                                     ? UPDATE_CAPACITY_DOWN
+                                     : UPDATE_CAPACITY_UP
                 );
             } else {
                 // signal to the local queue that it should reset it's
@@ -344,14 +347,23 @@ static __s64 burst_control(
         // the global timer has asked us to reset the throughput counter
         queue->reset = UPDATE_NOT_STARTED;
         queue->throughput = packet_size;
-        if (reset == UPDATE_THROUGHPUT_CAPACITY) {
-            // the capacity has changed. Since the magic is supposed to fill the
-            // queue we reset so that we can gracefully calculate it again for
-            // the new size
-            queue->magic = 0;
+        if (reset == UPDATE_CAPACITY_DOWN) {
             // the queue size was decreased by the timer
             if (queue->occupancy > (__s64)queue->capacity) {
-                queue->occupancy = (__s64)queue->capacity;
+                __u64 removed = (__u64)queue->occupancy - queue->capacity;
+                queue->occupancy -= (__s64)removed;
+                queue->magic = queue->magic > removed ? queue->magic - removed
+                                                      : 0;
+            }
+        } else if (reset == UPDATE_CAPACITY_UP) {
+            if (queue->magic != 0 && queue->occupancy > 0) {
+                // the queue size was increased and since there was magic in it
+                // we assume that it was (almost) full. We want to stay close to
+                // that state, so we fill up the queue and adjust the saved
+                // magic accordingly
+                __u64 added = queue->capacity - (__u64)queue->occupancy;
+                queue->magic += added;
+                queue->occupancy += (__s64)added;
             }
         }
     }
