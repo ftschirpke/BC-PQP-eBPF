@@ -464,7 +464,7 @@ def plot_flow_server_file(file: Path, show_tx=True, save=False, name="flow_serve
     save_or_show(fig, out_path, save)
 
 
-def plot_scale_server_file(file: Path, show_tx=True, show_physical_cores=20, save=False, name="scale_server"):
+def plot_scale_server_file(file: Path, show_tx=True, show_physical_cores=20, save=False, name="scale_server", min_y_zoom: Optional[float] = None):
     with open(file, "r") as f:
         obj = json.load(f)
 
@@ -489,7 +489,7 @@ def plot_scale_server_file(file: Path, show_tx=True, show_physical_cores=20, sav
         else:
             assert False, f"{pkt_size=} is neither 64 nor 1514"
 
-    fig, (ax64, ax_mtu) = plt.subplots(1, 2, figsize=(12, 6))
+    fig, (ax64, ax_mtu) = plt.subplots(1, 2, figsize=(14, 6))
 
     counts = []
     rx_vals = []
@@ -501,6 +501,12 @@ def plot_scale_server_file(file: Path, show_tx=True, show_physical_cores=20, sav
     ax64.plot(counts, rx_vals, label="RX")
     if show_tx:
         ax64.plot(counts, tx_vals, label="TX")
+    if min_y_zoom is not None:
+        y_min, y_max = ax64.get_ylim()
+        if y_max - y_min < min_y_zoom:
+            y_middle = (y_min + y_max) / 2
+            half = min_y_zoom / 2
+            ax64.set_ylim(y_middle - half, y_middle + half)
     ax64.set_xlabel("Number of RX queues")
     ax64.set_ylabel("Average enforced rate in Gbit/s")
     if isinstance(show_physical_cores, int) and show_physical_cores > 0:
@@ -518,12 +524,60 @@ def plot_scale_server_file(file: Path, show_tx=True, show_physical_cores=20, sav
     ax_mtu.plot(counts, rx_vals, label="RX")
     if show_tx:
         ax_mtu.plot(counts, tx_vals, label="TX")
+    if min_y_zoom is not None:
+        y_min, y_max = ax_mtu.get_ylim()
+        if y_max - y_min < min_y_zoom:
+            y_middle = (y_min + y_max) / 2
+            half = min_y_zoom / 2
+            ax_mtu.set_ylim(y_middle - half, y_middle + half)
     ax_mtu.set_xlabel("Number of RX queues")
     ax_mtu.set_ylabel("Average enforced rate in Gbit/s")
     if isinstance(show_physical_cores, int) and show_physical_cores > 0:
         y_min, y_max = ax_mtu.get_ylim()
         ax_mtu.vlines(show_physical_cores, y_min, y_max, color="red", linewidth=2, label="Number of physical cores")
     ax_mtu.legend()
+
+    out_path = FINAL_PRESENTATION_DIR / f"{name}.pdf"
+    save_or_show(fig, out_path, save)
+
+
+def plot_enforcement_server_file(file: Path, show_tx=True, show_linear=False, save=False, name="scale_server"):
+    with open(file, "r") as f:
+        obj = json.load(f)
+
+    assert isinstance(obj, list)  # and len(obj) == 1
+
+    data = {}
+
+    def val_func(mbit_val):
+        return mbit_val / 1024
+
+    for o in obj:
+        maxrate = o["config"]["maxrate"] / 1000
+        o_data = o["data"]["out"]["throughput"]
+        rx_val = val_func(o_data["RX"]["Mbit"])
+        tx_val = val_func(o_data["TX"]["Mbit"])
+        data[maxrate] = (rx_val, tx_val)
+
+    fig, ax = plt.subplots(1, 1, figsize=(12, 6))
+
+    counts = []
+    rx_vals = []
+    tx_vals = []
+    for count, (rx, tx) in sorted(data.items()):
+        counts.append(count)
+        rx_vals.append(rx)
+        tx_vals.append(tx)
+    ax.plot(counts, rx_vals, label="RX")
+    if show_tx:
+        ax.plot(counts, tx_vals, label="TX")
+    if show_linear:
+        x = [min(counts), max(counts)]
+        ax.plot(x, x, label="Expectation", color="red", linestyle="dashed", linewidth=2)
+
+    ax.set_xlabel("Configured rate to enforce")
+    ax.set_ylabel("Average enforced rate in Gbit/s")
+    ax.legend()
 
     out_path = FINAL_PRESENTATION_DIR / f"{name}.pdf"
     save_or_show(fig, out_path, save)
@@ -607,6 +661,10 @@ if __name__ == "__main__":
     save_plots = input("Press 'S' to save the plots instead of showing them: ").lower().startswith("s")
     # bursty_plot(save_plots)
     # progress_plot(save_plots)
+    plot_enforcement_server_file(DATA_DIR / "server-v2" / "rxq_8_flows_8.json", name="nonsharded_enforcement_8", show_linear=True, save=save_plots)
+    plot_enforcement_server_file(DATA_DIR / "server-v2" / "rxq_8_flows_16.json", name="nonsharded_enforcement_16", show_linear=True, save=save_plots)
+    plot_enforcement_server_file(DATA_DIR / "server-v2" / "rxq_8_flows_32.json", name="nonsharded_enforcement_32", show_linear=True, save=save_plots)
+    plot_bursty_iperf3(DATA_DIR / "tcp" / "burst-server.json", name="nonsharded_tcp_burst", save=save_plots)
     plot_flow_server_file(DATA_DIR / "server-v2" / "flow-data.json", name="nonshared_flow_exp", save=save_plots)
     plot_scale_server_file(DATA_DIR / "server-v2" / "scale-data.json", name="nonshared_scale_exp", save=save_plots)
     plot_scale_server_file(DATA_DIR / "server-v2" / "baseline_scaling.json", name="baseline_scale_exp", save=save_plots)
@@ -620,7 +678,13 @@ if __name__ == "__main__":
     options.iperf3_options.show_avg = False
     options.iperf3_options.show_enforced_rate = False
     options.legend = False
+
     options.clear_files()
     options.iperf3_files.append(DATA_DIR / "burst" / "client.json")
     options.iperf3_files.append(DATA_DIR / "burst" / "server.json")
+    exploration_plots(options)
+
+    options.clear_files()
+    options.iperf3_files.append(DATA_DIR / "tcp" / "client.json")
+    options.iperf3_files.append(DATA_DIR / "tcp" / "server.json")
     exploration_plots(options)
