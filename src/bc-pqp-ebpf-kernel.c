@@ -374,7 +374,7 @@ static __s64 burst_control(
         // monotonic
         rolled_over = 1;
         burst_occupancy = queue->burst_occupancy;
-        queue->burst_occupancy += packet_size;
+        queue->burst_occupancy = packet_size;
         if (unlikely(burst_window_offset >= 2 * BURST_TIME)) {
             // we missed at least one BURST_TIME slot (no packet arrived)
             // therefore the last burst occupancy was actually 0
