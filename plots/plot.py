@@ -328,7 +328,7 @@ def plot_iperf3_file(fig, ax, file: Path, options: IPerf3PlotOptions):
     ax.set_ylabel("Rate in Gbit/s")
 
 
-def plot_bursty_iperf3(file: Path, debug=False, bc_threshhold=True, rate=True, save=False, name="burst_iperf3"):
+def plot_bursty_iperf3(file: Path, debug=False, bc_threshhold=True, rate=True, save=False, name="burst_iperf3", fixed_starts=None):
     def val_func(byte_val, start, end):
         return (byte_val * 8 / 1024**3) / (end - start)
 
@@ -381,11 +381,25 @@ def plot_bursty_iperf3(file: Path, debug=False, bc_threshhold=True, rate=True, s
     accumulated_xs = []
     accumulated_ys = []
 
+    if fixed_starts is None:
+        fs = None
+
+        def check(i, fs):
+            return abs(base_ys[i] - base_ys[max(i - 1, 1)]) < 0.02
+    else:
+        fs = 0
+
+        def check(i, fs):
+            reached_start = i == fixed_starts[fs]
+            if reached_start:
+                fs += 1
+            return not reached_start
+
     i = 1
     for non_baseline_i in non_baseline_idx:
         start, xs, ys = data[non_baseline_i]
 
-        while i < len(base_ys) and abs(base_ys[i] - base_ys[max(i - 1, 1)]) < 0.02:
+        while i < len(base_ys) and check(i, fs):
             accumulated_xs.append(base_xs[i])
             accumulated_ys.append(base_ys[i])
             i += 1
@@ -667,15 +681,16 @@ def save_or_show(fig: plt.figure, path: Path, save_plot: bool):
 if __name__ == "__main__":
 
     save_plots = input("Press 'S' to save the plots instead of showing them: ").lower().startswith("s")
-    plot_enforcement_server_file(DATA_DIR / "server-v2" / "rxq_8_flows_8.json", name="nonsharded_enforcement_8", show_linear=True, save=save_plots)
-    plot_enforcement_server_file(DATA_DIR / "server-v2" / "rxq_8_flows_16.json", name="nonsharded_enforcement_16", show_linear=True, save=save_plots)
-    plot_enforcement_server_file(DATA_DIR / "server-v2" / "rxq_8_flows_32.json", name="nonsharded_enforcement_32", show_linear=True, save=save_plots)
-    plot_bursty_iperf3(DATA_DIR / "tcp" / "burst-server.json", name="nonsharded_tcp_burst", save=save_plots)
-    plot_bursty_iperf3(DATA_DIR / "tcp" / "reno-burst-server.json", name="nonsharded_reno_tcp_burst", save=save_plots)
-    # plot_flow_server_file(DATA_DIR / "server-v2" / "flow-data.json", name="nonshared_flow_exp", save=save_plots)
-    plot_scale_server_file(DATA_DIR / "server-v2" / "scale-data.json", name="nonshared_scale_exp", save=save_plots)
-    plot_scale_server_file(DATA_DIR / "server-v2" / "baseline_scaling.json", name="baseline_scale_exp", save=save_plots)
+    # plot_enforcement_server_file(DATA_DIR / "server-v2" / "rxq_8_flows_8.json", name="nonsharded_enforcement_8", show_linear=True, save=save_plots)
+    # plot_enforcement_server_file(DATA_DIR / "server-v2" / "rxq_8_flows_16.json", name="nonsharded_enforcement_16", show_linear=True, save=save_plots)
+    # plot_enforcement_server_file(DATA_DIR / "server-v2" / "rxq_8_flows_32.json", name="nonsharded_enforcement_32", show_linear=True, save=save_plots)
+    # plot_bursty_iperf3(DATA_DIR / "tcp" / "burst-server.json", name="nonsharded_tcp_burst", save=save_plots)
+    # plot_bursty_iperf3(DATA_DIR / "tcp" / "reno-burst-server.json", name="nonsharded_reno_tcp_burst", save=save_plots)
+    # # plot_flow_server_file(DATA_DIR / "server-v2" / "flow-data.json", name="nonshared_flow_exp", save=save_plots)
+    # plot_scale_server_file(DATA_DIR / "server-v2" / "scale-data.json", name="nonshared_scale_exp", save=save_plots)
+    # plot_scale_server_file(DATA_DIR / "server-v2" / "baseline_scaling.json", name="baseline_scale_exp", save=save_plots)
     plot_bursty_iperf3(DATA_DIR / "burst" / "server.json", name="nonsharded_udp_burst", save=save_plots)
+    plot_bursty_iperf3(DATA_DIR / "burst" / "sharded-server.json", name="sharded_udp_burst", save=save_plots, fixed_starts=[41])
 
     if input("Press ENTER to continue with \"exploration plots\" "):
         # do not show "exploration plots"
@@ -687,8 +702,8 @@ if __name__ == "__main__":
     options.legend = False
 
     options.clear_files()
-    options.iperf3_files.append(DATA_DIR / "burst" / "client.json")
-    options.iperf3_files.append(DATA_DIR / "burst" / "server.json")
+    options.iperf3_files.append(DATA_DIR / "burst" / "sharded-client.json")
+    options.iperf3_files.append(DATA_DIR / "burst" / "sharded-server.json")
     exploration_plots(options)
 
     options.clear_files()
