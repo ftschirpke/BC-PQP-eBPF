@@ -514,7 +514,7 @@ def plot_scale_server_file(file: Path, show_tx=True, show_physical_cores=20, sav
             half = min_y_zoom / 2
             ax64.set_ylim(y_middle - half, y_middle + half)
     ax64.set_xlabel("Number of CPU cores")
-    ax64.set_ylabel("Average enforced rate in Gbit/s")
+    ax64.set_ylabel("Average throughput in Gbit/s")
     if isinstance(show_physical_cores, int) and show_physical_cores > 0:
         y_min, y_max = ax64.get_ylim()
         ax64.vlines(show_physical_cores, y_min, y_max, color="red", linewidth=2, label="\#Physical cores")
@@ -537,7 +537,7 @@ def plot_scale_server_file(file: Path, show_tx=True, show_physical_cores=20, sav
             half = min_y_zoom / 2
             ax_mtu.set_ylim(y_middle - half, y_middle + half)
     ax_mtu.set_xlabel("Number of CPU cores")
-    ax_mtu.set_ylabel("Average enforced rate in Gbit/s")
+    ax_mtu.set_ylabel("Average throughput in Gbit/s")
     if isinstance(show_physical_cores, int) and show_physical_cores > 0:
         y_min, y_max = ax_mtu.get_ylim()
         ax_mtu.vlines(show_physical_cores, y_min, y_max, color="red", linewidth=2, label="\#Physical cores")
@@ -584,7 +584,7 @@ def plot_enforcement_server_file(file: Path, show_tx=True, show_linear=False, sa
         ax.plot(x, x, label="Expectation", color="red", linestyle="dashed", linewidth=2)
 
     ax.set_xlabel("Configured rate to enforce")
-    ax.set_ylabel("Average throughput in Gbit/s")
+    ax.set_ylabel("Average enforced rate in Gbit/s")
     ax.legend()
 
     out_path = FINAL_PRESENTATION_DIR / f"{name}.pdf"
