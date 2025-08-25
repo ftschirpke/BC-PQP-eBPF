@@ -242,7 +242,15 @@ static __u32 timer_callback(
                     ph_queue_key, rx_queue);
                 goto reset_timer;
             }
-            __u64 curr_tp = lq->throughput;
+            // checkt that the local queue has reset the field,
+            // otherwise assume that it it inactive
+            __u64 curr_tp;
+            if (lq->reset == UPDATE_NOT_STARTED) {
+                curr_tp = lq->throughput;
+            } else {
+                curr_tp = 1;
+            }
+
             __u64 prev_tp = globals->queues[ph_queue]
                                 .rx_queue_throughput[rx_queue];
             // update global moving average
