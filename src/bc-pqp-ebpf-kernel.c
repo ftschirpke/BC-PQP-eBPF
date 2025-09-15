@@ -85,7 +85,10 @@ struct {
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } mac_map SEC(".maps");
 
-// bypass kernel networking stack by rewriting the MAC address to eth1
+
+/**
+ * Bypass kernel networking stack by rewriting the MAC address to eth1.
+ **/
 static __u32 bypass_kernel_if_possible(struct xdp_md* ctx) {
     void* data = (void*)(long)ctx->data;
     void* data_end = (void*)(long)ctx->data_end;
@@ -166,6 +169,10 @@ struct {
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } xdp_general_map SEC(".maps");
 
+/**
+ * Calculates how much bytes have "drained" since the last packet, according to
+ * the dequeue rate.
+ **/
 static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
     // can be negative if we have a timing issue and someone who has started
     // after us already managed to write to the queue. In that case our
@@ -187,10 +194,10 @@ static __u64 calculate_drain(__u64 now, __u64 previous, __u64 rate) {
 }
 
 /**
-    Uses the supplied occupancy and capacity to calculate whether magic needs to
-   be added/removed. That amount if any is returned as a signed integer but is
-   not yet added to the occupancy.
-*/
+ * Calculates whether burst control needs to be performed. The amount of magic
+ * bytes that should be added/removed is returned, the caller is responsible
+ * for adjusting the occupancy as needed.
+ **/
 static __s64 burst_control(
     __u32 key, struct phantom_queue* queue, __u64 previous, __u64 now,
     __u64 packet_size
@@ -270,6 +277,10 @@ static __s64 burst_control(
     return 0;
 }
 
+/**
+ * Tries to add the packet to the queue. Returns 0 on success, non-zero
+ * otherwise.
+ **/
 static __u64 try_increment_counter(
     __u32 key, struct phantom_queue* queue, __u64 packet_size
 ) {
@@ -325,7 +336,8 @@ static __u64 try_increment_counter(
 }
 
 /**
- * classify packet using destination port
+ * Classify packet by port. We use the source port by default, you can also
+ * classify by destination port by setting `CLASSIFY_BY_DESTINATION`.
  **/
 static void classify_packet(
     struct xdp_md* ctx, __u32* phantom_queue, __u32* packet_size
@@ -425,6 +437,9 @@ static __u32 initialize(struct phantom_queue* queue) {
     return 0;
 }
 
+/**
+ * The XDP entry point.
+ **/
 SEC("xdp")
 __u32 bc_pqp_xdp(struct xdp_md* ctx) {
     log("===== BC-PQP on rx-queue %u =====", ctx->rx_queue_index);
