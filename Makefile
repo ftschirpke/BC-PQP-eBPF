@@ -7,7 +7,8 @@ EBPF_SRC = bc-pqp-ebpf-kernel.c
 # === BUILDING THE SOURCE CODE ===
 
 RX_QUEUES ?= 4
-PHANTOM_QUEUES ?= 10
+# MUST be a power of two
+PHANTOM_QUEUES ?= 4
 BURST_TIME ?= 10000000L
 RATE ?= GIBIBIT
 
@@ -17,7 +18,7 @@ BUILD_DIR = build
 LLC = llc
 CLANG = clang
 
-C_FLAGS = -O2
+C_FLAGS = -O2 -ftrivial-auto-var-init=zero
 WARN_FLAGS = -Wall -Wno-unused-value -Wno-pointer-sign -Wno-compare-distinct-pointer-types -Wsign-compare -Wimplicit-fallthrough -Wsign-conversion -Werror
 
 EBPF_HDR = 

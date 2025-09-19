@@ -4,7 +4,10 @@ RUN apk add linux-headers clang llvm elfutils-dev libbpf-dev libxdp-dev xdp-tool
 COPY ./src /root/src
 COPY ./Makefile /root/Makefile
 WORKDIR /root
+RUN mkdir -p build
+RUN apk info -v > ./build/metadata
 RUN make build
+RUN llvm-objdump -d -l --symbolize-operands ./build/bc-pqp-ebpf-kernel.o > ./build/bc-pqp-ebpf-kernel.d
 
 # inspired by https://github.com/k8spacket/k8spacket/blob/master/tests/e2e/vm/filesystem/Dockerfile
 FROM alpine:${ALPINE_REVISION}
@@ -38,4 +41,6 @@ RUN rc-update add sysfs boot
 RUN rm -f /etc/init.d/machine-id /etc/init.d/hwdrivers
 
 COPY --from=build /root/build/*.o /root/
+COPY --from=build /root/build/metadata /root/.build_metadata
+COPY --from=build /root/build/bc-pqp-ebpf-kernel.d /root/bc-pqp-ebpf-kernel.d
 COPY --chmod=700 scripts/* /root/
