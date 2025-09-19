@@ -7,7 +7,9 @@ WORKDIR /root
 RUN mkdir -p build
 RUN apk info -v > ./build/metadata
 RUN make build
-RUN llvm-objdump -d -l --symbolize-operands ./build/bc-pqp-ebpf-kernel.o > ./build/bc-pqp-ebpf-kernel.d
+RUN for f in ./build/*.o; do \
+      llvm-objdump -d -l --symbolize-operands "$f" > "${f%.o}.d"; \
+    done
 
 # inspired by https://github.com/k8spacket/k8spacket/blob/master/tests/e2e/vm/filesystem/Dockerfile
 FROM alpine:${ALPINE_REVISION}
@@ -42,5 +44,5 @@ RUN rm -f /etc/init.d/machine-id /etc/init.d/hwdrivers
 
 COPY --from=build /root/build/*.o /root/
 COPY --from=build /root/build/metadata /root/.build_metadata
-COPY --from=build /root/build/bc-pqp-ebpf-kernel.d /root/bc-pqp-ebpf-kernel.d
+COPY --from=build /root/build/*.d /root/
 COPY --chmod=700 scripts/* /root/

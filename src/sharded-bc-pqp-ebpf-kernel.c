@@ -27,6 +27,7 @@
 #endif
 
 #ifndef PHANTOM_QUEUES
+// MUST be a power of two
 #define PHANTOM_QUEUES 4
 #endif
 

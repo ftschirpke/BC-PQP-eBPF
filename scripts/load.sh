@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ $# -eq 0 ]; then
-    f=bc-pqp-ebpf-kernel.o
+    f=simple-bc-pqp-ebpf-kernel.o
 else
     f=$1
 fi

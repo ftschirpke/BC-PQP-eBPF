@@ -31,13 +31,15 @@ make qemu
 The VM will launch and attach a TTY to your terminal. Once startup is complete, you will be automatically logged in as root to the VM. All build artifacts as well as some helper scripts are located in the home directory. To load bc-pqp-ebpf into the VM, run
 
 ```sh
-./load.sh
+./load.sh # loads simple-bc-pqp-ebpf-kernel.o by default
+# or
+# ./load.sh sharded-bc-pqp-ebpf-kernel.o
 # run the following to insert the program with logs enabled
-# ./load.sh debug_bc-pqp-ebpf-kernel.o
+# ./load.sh debug_simple-bc-pqp-ebpf-kernel.o
 # the logs can then be viewed by running
 # ./logs.sh
 # To do both of these things at once, run
-# ./watch.sh debug_bc-pqp-ebpf-kernel.o
+# ./watch.sh debug_simple-bc-pqp-ebpf-kernel.o
 ```
 
 Building the code and starting the VM can also be done with one command:
