@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if [ $# -eq 0 ]; then
-    f=bc-pqp-ebpf-kernel.o
+    f=simple-bc-pqp-ebpf-kernel.o
 else
     f=$1
 fi
@@ -37,11 +37,12 @@ HEX_SERVER_MAC=$(mac2hex $SERVER_MAC)
 echo "Loading eBPF program $f"
 # timers need a userspace reference to work (thats why we use --pin-path)
 # see https://docs.ebpf.io/linux/helper-function/bpf_timer_init/
-xdp-loader load --pin-path /sys/fs/bpf/bc-pqp -m skb eth0 $f || exit 1
+NAMESPACE="${f%.*}"
+xdp-loader load --pin-path /sys/fs/bpf/$NAMESPACE -m skb eth0 $f || exit 1
 
 echo "Writing mac addresses to map"
 
-MAP_PATH="/sys/fs/bpf/bc-pqp/mac_map"
+MAP_PATH="/sys/fs/bpf/$NAMESPACE/mac_map"
 
 bpftool map update pinned $MAP_PATH key 0 0 0 0 value hex $HEX_CLIENT_MAC
 bpftool map update pinned $MAP_PATH key 1 0 0 0 value hex $HEX_VM_INGRESS_MAC

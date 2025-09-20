@@ -2,14 +2,12 @@
 
 all: qemu
 
-EBPF_SRC = bc-pqp-ebpf-kernel.c
+EBPF_SRC = simple-bc-pqp-ebpf-kernel.c sharded-bc-pqp-ebpf-kernel.c
 
 # === BUILDING THE SOURCE CODE ===
 
-RX_QUEUES ?= 4
-PHANTOM_QUEUES ?= 10
-BURST_TIME ?= 10000000L
-RATE ?= GIBIBIT
+CPUS ?= 4
+# = RX_QUEUES
 
 SRC_DIR = src
 BUILD_DIR = build
@@ -17,7 +15,7 @@ BUILD_DIR = build
 LLC = llc
 CLANG = clang
 
-C_FLAGS = -O2
+C_FLAGS = -O2 -ftrivial-auto-var-init=zero
 WARN_FLAGS = -Wall -Wno-unused-value -Wno-pointer-sign -Wno-compare-distinct-pointer-types -Wsign-compare -Wimplicit-fallthrough -Wsign-conversion -Werror
 
 EBPF_HDR = 
@@ -36,10 +34,6 @@ $(EBPF_OBJ): $(BUILD_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CLANG) \
 	    -target bpf \
 	    -D __BPF_TRACING__ \
-		-DRX_QUEUES=$(RX_QUEUES) \
-		-DPHANTOM_QUEUES=$(PHANTOM_QUEUES) \
-		-DBURST_TIME=$(BURST_TIME) \
-		-DRATE=$(RATE) \
 		$(C_FLAGS) \
 	    $(WARN_FLAGS) \
 	    -g \
@@ -52,10 +46,6 @@ $(EBPF_DEBUG_OBJ): $(BUILD_DIR)/$(DEBUG_PREFIX)%.o: $(SRC_DIR)/%.c
 	    -target bpf \
 	    -D __BPF_TRACING__ \
 		-D DEBUG \
-		-DRX_QUEUES=$(RX_QUEUES) \
-		-DPHANTOM_QUEUES=$(PHANTOM_QUEUES) \
-		-DBURST_TIME=$(BURST_TIME) \
-		-DRATE=$(RATE) \
 		$(C_FLAGS) \
 	    $(WARN_FLAGS) \
 	    -g \
@@ -89,12 +79,12 @@ qemu: qemu/filesystem.qcow2
 		--name bc-pqp-ebpf \
 		--transient \
 		--destroy-on-exit \
-		--vcpus $(RX_QUEUES) \
+		--vcpus $(CPUS) \
 		--memory=4096 \
 		--disk=/var/lib/libvirt/images/bc-pqp-fs.qcow2 \
 		--boot kernel=/var/lib/libvirt/images/bc-pqp-vmlinux-${FLAVOR},initrd=/var/lib/libvirt/images/bc-pqp-initramfs-${FLAVOR},kernel_args="rootfstype=ext4 console=ttyS0 root=/dev/vda1 rw" \
-		--network bridge=br1,driver.queues=$(RX_QUEUES) \
-		--network bridge=br2,driver.queues=$(RX_QUEUES) \
+		--network bridge=br1,driver.queues=$(CPUS) \
+		--network bridge=br2,driver.queues=$(CPUS) \
 		--os-variant=alpinelinux3.20 \
 		--graphics none \
 		--autoconsole text
