@@ -16,7 +16,7 @@ If you wish to compile the code on your host (and not in a container), you can r
 make build
 ```
 
-This will generate 2 object files: one with logging statements enabled, one without. For a list of build dependencies, please refer to the build stage of our [Dockerfile](./Dockerfile)
+This will generate 2 object files for each source file: one with logging statements enabled, one without. For a list of build dependencies, please refer to the build stage of our [Dockerfile](./Dockerfile)
 
 ## Running
 
